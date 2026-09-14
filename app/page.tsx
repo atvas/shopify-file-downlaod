@@ -644,7 +644,7 @@ export default function Page() {
       .replace(/\.json$/, "")
   }
 
-  /** 拉取主题列表 */
+  /** 拉取主题列表，返回主题数组 */
   const fetchThemes = useCallback(async () => {
     setTplLoading(true)
     setTplError("")
@@ -656,9 +656,13 @@ export default function Page() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "获取主题失败")
-      setThemes(data.themes ?? [])
+      const list: { id: number; name: string; role: string }[] =
+        data.themes ?? []
+      setThemes(list)
+      return list
     } catch (err) {
       setTplError(err instanceof Error ? err.message : "获取主题失败")
+      return []
     } finally {
       setTplLoading(false)
     }
@@ -712,8 +716,10 @@ export default function Page() {
         })
         const data = await res.json()
         if (!res.ok) throw new Error(data.error || "获取模板内容失败")
-        setJsonInput(data.content ?? "")
+        const content = data.content ?? ""
+        setJsonInput(content)
         setTplDialogOpen(false)
+        handleParseRef.current?.(content)
       } catch (err) {
         setTplError(err instanceof Error ? err.message : "获取模板内容失败")
       } finally {
@@ -734,23 +740,36 @@ export default function Page() {
     [themes]
   )
 
-  /** 打开 Dialog 时初始化 */
-  const openTemplateDialog = useCallback(() => {
-    setTplStep(1)
-    setSelectedThemeId(null)
+  /** 打开 Dialog：有在线主题时直接跳到模板列表 */
+  const openTemplateDialog = useCallback(async () => {
     setSelectedKey(null)
     setTplError("")
     setTplSearch("")
     setTplDialogOpen(true)
-    fetchThemes()
-  }, [fetchThemes])
 
-  const handleParse = useCallback(async () => {
+    const list = await fetchThemes()
+    const live = list.find((t) => t.role === "main")
+    if (live) {
+      setSelectedThemeId(live.id)
+      setTplStep(2)
+      fetchTemplates(live.id)
+    } else {
+      setSelectedThemeId(null)
+      setTplStep(1)
+    }
+  }, [fetchThemes, fetchTemplates])
+
+  const handleParseRef = useRef<((content?: string) => Promise<void>) | null>(
+    null
+  )
+
+  const handleParse = useCallback(async (content?: string) => {
     setError("")
     try {
-      const parsed = parseMediaUrls(jsonInput)
+      const parsed = parseMediaUrls(content ?? jsonInput)
       
       if (parsed.length === 0) {
+        setVideos([])
         setError("未找到素材文件（视频或图片）")
         return
       }
@@ -875,6 +894,7 @@ export default function Page() {
       setError(err instanceof Error ? err.message : "解析失败")
     }
   }, [jsonInput, storeDomain, accessToken])
+  handleParseRef.current = handleParse
 
   const handleToggle = useCallback((url: string) => {
     setVideos((prev) =>
@@ -1214,7 +1234,7 @@ export default function Page() {
 
             <div className="flex items-center gap-3">
               <Button
-                onClick={handleParse}
+                onClick={() => handleParse()}
                 disabled={resolving}
                 className="gap-2"
               >
