@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useEffect, useMemo, useRef } from "react"
+import { useState, useCallback, useEffect, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -13,487 +13,26 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Dialog, DialogClose, DialogContent } from "@/components/ui/dialog"
-import { log } from "console"
-
-interface MediaFile {
-  url: string
-  name: string
-  type: "video" | "image"
-  selected: boolean
-  resolvedUrl?: string | null
-}
-
-interface SavedConfig {
-  id: string
-  name: string
-  storeDomain: string
-  accessToken: string
-}
-
-/** /api/shopify-resolve 按 NDJSON 逐行推送的条目 */
-interface ResolveResult {
-  original: string
-  resolved: string | null
-  filename: string | null
-  error?: string
-}
-function parseMediaUrls(json: string): MediaFile[] {
-  const videoPattern = /\.(mp4|webm|mov|avi|m4v)(\?[^"'\s]*)?$/i
-  const imagePattern =
-    /\.(png|jpg|jpeg|svg|gif|webp|avif|bmp|tiff?)(\?[^"'\s]*)?$/i
-  
-  // 关键修复 1：严格限制开头 ^ 和结尾 $，防止将包含 URL 的整段 HTML 误判为纯 URL
-  const shopifyCdnPattern =
-    /^(https?:)?\/\/cdn\.shopify\.com.*\.(mp4|webm|mov|avi|png|jpg|jpeg|svg|gif|webp)(\?[^"'\s]*)?$/i
-    
-  // 关键修复 2：同步兼容 shopify://files/ 和 shopify://shop_images/
-  const shopifyFilePattern = /^shopify:\/\/(files|shop_images)\/.+/i
-  
-  const items = new Map<string, MediaFile>()
-
-  const mediaExtRe =
-    /\.(mp4|webm|mov|avi|m4v|png|jpg|jpeg|svg|gif|webp|avif|bmp|tiff?)/i
-  const urlInHtmlRe = new RegExp(
-    `(?:src|href|content)=["']([^"']*${mediaExtRe.source}[^"']*)["']`,
-    "gi",
-  )
-  const srcsetUrlRe = new RegExp(`([^"'\\s,]+${mediaExtRe.source})`, "gi")
-  const cssUrlRe = new RegExp(
-    `url\\(["']?([^"'\\)]*${mediaExtRe.source}[^"'\\)]*)["']?\\)`,
-    "gi",
-  )
-
-  function tryAddUrl(raw: string): boolean {
-    const trimmed = raw.trim()
-    if (!trimmed) return false
-
-    // 如果包含 < 字符（说明是 HTML 片段），绝对不作为纯 URL 处理，直接返回 false 走后面的 extractUrlsFromHtml 提取
-    if (trimmed.includes("<")) return false
-
-    const clean = trimmed.split("?")[0]
-
-    if (videoPattern.test(trimmed)) {
-      items.set(clean, {
-        url: clean,
-        name: "",
-        type: "video",
-        selected: false,
-      })
-      return true
-    } else if (imagePattern.test(trimmed)) {
-      items.set(clean, {
-        url: clean,
-        name: "",
-        type: "image",
-        selected: false,
-      })
-      return true
-    } else if (shopifyCdnPattern.test(trimmed)) {
-      const isVideo = /\.(mp4|webm|mov|avi)/i.test(trimmed)
-      items.set(clean, {
-        url: clean,
-        name: "",
-        type: isVideo ? "video" : "image",
-        selected: false,
-      })
-      return true
-    } else if (shopifyFilePattern.test(trimmed)) {
-      const ext = clean.split(".").pop()?.toLowerCase() || ""
-      const videoExts = ["mp4", "webm", "mov", "avi", "m4v"]
-      items.set(clean, {
-        url: clean,
-        name: "",
-        type: videoExts.includes(ext) ? "video" : "image",
-        selected: false,
-      })
-      return true
-    }
-    return false
-  }
-
-  /**
-   * 从 HTML / 纯文本片段中提取所有媒体 URL。
-   * 覆盖 src=""、href=""、srcset、CSS url() 等常见嵌入方式。
-   */
-  function extractUrlsFromHtml(html: string): void {
-    let match
-
-    // src="..." / href="..." / content="..."
-    urlInHtmlRe.lastIndex = 0
-    while ((match = urlInHtmlRe.exec(html)) !== null) {
-      tryAddUrl(match[1])
-    }
-
-    // srcset — 可能包含多个 URL，用逗号分隔
-    srcsetUrlRe.lastIndex = 0
-    while ((match = srcsetUrlRe.exec(html)) !== null) {
-      tryAddUrl(match[1])
-    }
-
-    // CSS url(...)
-    cssUrlRe.lastIndex = 0
-    while ((match = cssUrlRe.exec(html)) !== null) {
-      tryAddUrl(match[1])
-    }
-  }
-
-  try {
-    // 自动去除 Shopify 模板中的 /* */ 块注释和 // 单行注释
-    const cleaned = json
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "")
-      .trim()
-    const obj = JSON.parse(cleaned)
-
-    function extractUrls(data: unknown): void {
-      if (typeof data === "string") {
-        const trimmed = data.trim()
-        // 先尝试把整个字符串当作纯 URL，失败了（包括含有 HTML 标签的情况）再进入 HTML 解包逻辑
-        if (!tryAddUrl(trimmed)) {
-          if (
-            trimmed.includes("src=") ||
-            trimmed.includes("href=") ||
-            trimmed.includes("url(") ||
-            trimmed.includes("srcset") ||
-            trimmed.includes("<img")
-          ) {
-            extractUrlsFromHtml(trimmed)
-          }
-        }
-      } else if (Array.isArray(data)) {
-        data.forEach(extractUrls)
-      } else if (data && typeof data === "object") {
-        Object.values(data).forEach(extractUrls)
-      }
-    }
-
-    extractUrls(obj)
-  } catch {
-    throw new Error("无效的 JSON 格式")
-  }
-
-  for (const item of items.values()) {
-    if (!item.name) {
-      item.name =
-        item.url.split("/").pop()?.split("?")[0] ||
-        `unknown.${item.type === "video" ? "mp4" : "png"}`
-    }
-  }
-
-  return Array.from(items.values())
-}
-
-
-const STORAGE_KEY = "shopify-video-downloader-configs"
-const LAST_USED_KEY = "shopify-video-downloader-last-used"
-
-function getSavedConfigsFromStorage(): SavedConfig[] {
-  if (typeof window === "undefined") return []
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    return stored ? JSON.parse(stored) : []
-  } catch {
-    return []
-  }
-}
-
-function getLastUsedConfigFromStorage(): SavedConfig | null {
-  if (typeof window === "undefined") return null
-  try {
-    const lastUsedId = localStorage.getItem(LAST_USED_KEY)
-    if (lastUsedId) {
-      const configs = getSavedConfigsFromStorage()
-      return configs.find((c) => c.id === lastUsedId) || null
-    }
-  } catch {
-    // ignore
-  }
-  return null
-}
-
-// ── SVG 图标 ────────────────────────────────────────────────────────────
-function IconVideo({ className = "w-4 h-4" }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5" />
-      <rect x="2" y="6" width="14" height="12" rx="2" />
-    </svg>
-  )
-}
-
-function IconImage({ className = "w-4 h-4" }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
-      <circle cx="9" cy="9" r="2" />
-      <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
-    </svg>
-  )
-}
-
-function MediaCard({
-  file,
-  onToggle,
-  onPreview,
-}: {
-  file: MediaFile
-  onToggle: () => void
-  onPreview: () => void
-}) {
-  return (
-    <div
-      className="group relative cursor-pointer overflow-hidden rounded-xl border border-border/60 bg-card transition-all duration-200 hover:border-border hover:shadow-lg hover:shadow-black/5"
-      onClick={onToggle}
-    >
-      {/* 缩略图 */}
-      <div className="relative aspect-square overflow-hidden bg-muted/30">
-        {file.type === "image" ? (
-          file.resolvedUrl ? (
-            <img
-              src={
-                file.resolvedUrl.includes("cdn.shopify.com")
-                  ? file.resolvedUrl +
-                    (file.resolvedUrl.includes("?") ? "&" : "?") +
-                    "width=400"
-                  : file.resolvedUrl
-              }
-              alt={file.name}
-              className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.03]"
-              loading="lazy"
-            />
-          ) : (
-            <div className="flex h-full w-full items-center justify-center">
-              <span className="h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
-            </div>
-          )
-        ) : file.resolvedUrl ? (
-          <VideoThumbnail src={file.resolvedUrl} name={file.name} />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center">
-            <span className="h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
-          </div>
-        )}
-
-        {/* hover 底部渐变遮罩 + 预览按钮 */}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/40 to-transparent opacity-0 transition-opacity duration-200 group-hover:opacity-100" />
-        <button
-          type="button"
-          className="absolute right-2 bottom-2 flex h-5 w-5 items-center justify-center rounded-full bg-white/15 text-white opacity-0 backdrop-blur-md transition-all duration-200 group-hover:opacity-100 hover:scale-110 hover:bg-white/25"
-          onClick={(e) => {
-            e.stopPropagation()
-            onPreview()
-          }}
-        >
-          <svg
-            className="h-3 w-3"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <polyline points="15 3 21 3 21 9" />
-            <polyline points="9 21 3 21 3 15" />
-            <line x1="21" x2="14" y1="3" y2="10" />
-            <line x1="3" x2="10" y1="21" y2="14" />
-          </svg>
-        </button>
-
-        {/* 选中态 — 左下角圆点 + 微妙高亮 */}
-        <div
-          className={`absolute top-2.5 left-2.5 flex h-[22px] w-[22px] items-center justify-center rounded-full transition-all duration-200 ${
-            file.selected
-              ? "scale-100 bg-white text-primary shadow-sm"
-              : "scale-90 bg-black/10 text-white/80 opacity-0 backdrop-blur-sm group-hover:scale-100 group-hover:opacity-100 dark:bg-white/10"
-          }`}
-          onClick={(e) => {
-            e.stopPropagation()
-            onToggle()
-          }}
-        >
-          <svg
-            className="h-3 w-3"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="3"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            {file.selected ? (
-              <polyline points="20 6 9 17 4 12" />
-            ) : (
-              <>
-                <line x1="12" x2="12" y1="5" y2="19" />
-                <line x1="5" x2="19" y1="12" y2="12" />
-              </>
-            )}
-          </svg>
-        </div>
-      </div>
-
-      {/* 底部信息 */}
-      <div className="flex items-center gap-1.5 border-t border-border/40 px-2.5 py-1.5">
-        <span
-          className={`inline-flex shrink-0 items-center rounded px-1 py-px text-[9px] font-semibold tracking-wide uppercase ${
-            file.type === "video"
-              ? "bg-blue-500/8 text-blue-500 dark:text-blue-400"
-              : "bg-emerald-500/8 text-emerald-600 dark:text-emerald-400"
-          }`}
-        >
-          {file.type === "video"
-            ? "MP4"
-            : file.name.split(".").pop()?.toUpperCase() || "IMG"}
-        </span>
-        <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground/80">
-          {file.name}
-        </span>
-      </div>
-    </div>
-  )
-}
-
-/**
- * 从视频 URL 抽取一帧作为缩略图。
- *
- * 隐藏一个 <video> 元素，加载元数据后 seek 到 0.5s，用 canvas 截取画面。
- * Shopify CDN 视频支持 Range 请求，浏览器只下载 seek 附近的几 KB 数据，
- * 不会把整个视频拉下来。
- */
-function VideoThumbnail({ src, name }: { src: string; name: string }) {
-  const [thumb, setThumb] = useState<string | null>(null)
-  const [failed, setFailed] = useState(false)
-  const videoRef = useRef<HTMLVideoElement>(null)
-
-  const capture = useCallback(() => {
-    const video = videoRef.current
-    if (!video || video.readyState < 2) return
-    try {
-      const canvas = document.createElement("canvas")
-      canvas.width = video.videoWidth || 400
-      canvas.height = video.videoHeight || 300
-      const ctx = canvas.getContext("2d")
-      if (!ctx) return
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-      setThumb(canvas.toDataURL("image/jpeg", 0.6))
-    } catch {
-      setFailed(true)
-    }
-  }, [])
-
-  if (failed || !src) {
-    return (
-      <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-gradient-to-br from-blue-500/[0.04] to-violet-500/[0.04]">
-        <IconVideo className="h-10 w-10 text-blue-400/25" />
-        <span className="text-[10px] text-muted-foreground/40">video</span>
-      </div>
-    )
-  }
-
-  if (thumb) {
-    return (
-      <img
-        src={thumb}
-        alt={name}
-        className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.03]"
-      />
-    )
-  }
-
-  return (
-    <>
-      {/* 加载中占位 */}
-      <div className="absolute inset-0 flex items-center justify-center">
-        <span className="h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
-      </div>
-      <video
-        ref={videoRef}
-        src={src}
-        preload="metadata"
-        muted
-        playsInline
-        crossOrigin="anonymous"
-        onLoadedData={() => {
-          const v = videoRef.current
-          if (v) {
-            v.currentTime = Math.min(0.5, v.duration || 0.5)
-          }
-        }}
-        onSeeked={capture}
-        onError={() => setFailed(true)}
-        className="pointer-events-none absolute h-0 w-0 opacity-0"
-      />
-    </>
-  )
-}
-
-function IconDownload({ className = "w-4 h-4" }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-      <polyline points="7 10 12 15 17 10" />
-      <line x1="12" x2="12" y1="15" y2="3" />
-    </svg>
-  )
-}
-
-function IconCheck({ className = "w-4 h-4" }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <polyline points="20 6 9 17 4 12" />
-    </svg>
-  )
-}
-
-function IconChevronDown({ className = "w-4 h-4" }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="m6 9 6 6 6-6" />
-    </svg>
-  )
-}
+import {
+  type MediaFile,
+  type SavedConfig,
+  type ResolveResult,
+  STORAGE_KEY,
+  LAST_USED_KEY,
+  getSavedConfigsFromStorage,
+  getLastUsedConfigFromStorage,
+} from "@/lib/types"
+import { parseMediaUrls } from "@/lib/parse"
+import {
+  IconVideo,
+  IconImage,
+  IconDownload,
+  IconCheck,
+  IconChevronDown,
+} from "@/components/icons"
+import { MediaCard } from "@/components/media-card"
+import { TemplateDialog } from "@/components/template-dialog"
+import { PreviewDialog } from "@/components/preview-dialog"
 
 // ── 主页面 ──────────────────────────────────────────────────────────────
 export default function Page() {
@@ -507,6 +46,9 @@ export default function Page() {
   // 预览状态
   const [previewFile, setPreviewFile] = useState<MediaFile | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+
+  // 主题模板 Dialog
+  const [tplDialogOpen, setTplDialogOpen] = useState(false)
 
   const [savedConfigs, setSavedConfigs] = useState<SavedConfig[]>([])
   const [selectedConfigId, setSelectedConfigId] = useState("")
@@ -557,7 +99,7 @@ export default function Page() {
         localStorage.setItem(LAST_USED_KEY, configId)
       }
     },
-    [savedConfigs]
+    [savedConfigs],
   )
 
   const handleSaveConfig = useCallback(() => {
@@ -608,297 +150,146 @@ export default function Page() {
 
   const [resolving, setResolving] = useState(false)
 
-  // ── 主题模板 Dialog ──────────────────────────────────────────────
-  const [tplDialogOpen, setTplDialogOpen] = useState(false)
-  const [tplStep, setTplStep] = useState<1 | 2 | 3>(1)
-  const [themes, setThemes] = useState<
-    { id: number; name: string; role: string }[]
-  >([])
-  const [selectedThemeId, setSelectedThemeId] = useState<number | null>(null)
-  const [templateKeys, setTemplateKeys] = useState<string[]>([])
-  const [selectedKey, setSelectedKey] = useState<string | null>(null)
-  const [tplLoading, setTplLoading] = useState(false)
-  const [tplError, setTplError] = useState("")
-  const [tplSearch, setTplSearch] = useState("")
-
-  const TEMPLATE_NAMES: Record<string, string> = {
-    "templates/index.json": "首页",
-    "templates/product.json": "商品页",
-    "templates/collection.json": "集合页",
-    "templates/collections.json": "集合列表",
-    "templates/page.json": "页面",
-    "templates/cart.json": "购物车",
-    "templates/blog.json": "博客",
-    "templates/article.json": "文章",
-    "templates/list-collections.json": "集合列表",
-    "templates/search.json": "搜索页",
-    "templates/404.json": "404 页面",
-    "templates/password.json": "密码页",
-  }
-
-  const templateLabel = (key: string) => {
-    if (TEMPLATE_NAMES[key]) return TEMPLATE_NAMES[key]
-    return key
-      .replace(/^templates\//, "")
-      .replace(/^sections\//, "section/")
-      .replace(/\.json$/, "")
-  }
-
-  /** 拉取主题列表，返回主题数组 */
-  const fetchThemes = useCallback(async () => {
-    setTplLoading(true)
-    setTplError("")
-    try {
-      const res = await fetch("/api/shopify-templates", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ storeDomain, accessToken, action: "list-themes" }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || "获取主题失败")
-      const list: { id: number; name: string; role: string }[] =
-        data.themes ?? []
-      setThemes(list)
-      return list
-    } catch (err) {
-      setTplError(err instanceof Error ? err.message : "获取主题失败")
-      return []
-    } finally {
-      setTplLoading(false)
-    }
-  }, [storeDomain, accessToken])
-
-  /** 拉取选中主题的模板列表 */
-  const fetchTemplates = useCallback(
-    async (themeId: number) => {
-      setTplLoading(true)
-      setTplError("")
-      setTemplateKeys([])
+  const handleParse = useCallback(
+    async (content?: string) => {
+      setError("")
       try {
-        const res = await fetch("/api/shopify-templates", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            storeDomain,
-            accessToken,
-            action: "list-templates",
-            themeId,
-          }),
-        })
-        const data = await res.json()
-        if (!res.ok) throw new Error(data.error || "获取模板列表失败")
-        setTemplateKeys(data.keys ?? [])
-      } catch (err) {
-        setTplError(err instanceof Error ? err.message : "获取模板列表失败")
-      } finally {
-        setTplLoading(false)
-      }
-    },
-    [storeDomain, accessToken]
-  )
+        const parsed = parseMediaUrls(content ?? jsonInput)
 
-  /** 拉取模板内容并填入 jsonInput */
-  const fetchTemplateContent = useCallback(
-    async (themeId: number, key: string) => {
-      setTplLoading(true)
-      setTplError("")
-      try {
-        const res = await fetch("/api/shopify-templates", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            storeDomain,
-            accessToken,
-            action: "get-template",
-            themeId,
-            key,
-          }),
-        })
-        const data = await res.json()
-        if (!res.ok) throw new Error(data.error || "获取模板内容失败")
-        const content = data.content ?? ""
-        setJsonInput(content)
-        setTplDialogOpen(false)
-        handleParseRef.current?.(content)
-      } catch (err) {
-        setTplError(err instanceof Error ? err.message : "获取模板内容失败")
-      } finally {
-        setTplLoading(false)
-      }
-    },
-    [storeDomain, accessToken]
-  )
-
-  /** live (main) 主题排最前 */
-  const sortedThemes = useMemo(
-    () =>
-      [...themes].sort((a, b) => {
-        if (a.role === "main" && b.role !== "main") return -1
-        if (a.role !== "main" && b.role === "main") return 1
-        return 0
-      }),
-    [themes]
-  )
-
-  /** 打开 Dialog：有在线主题时直接跳到模板列表 */
-  const openTemplateDialog = useCallback(async () => {
-    setSelectedKey(null)
-    setTplError("")
-    setTplSearch("")
-    setTplDialogOpen(true)
-
-    const list = await fetchThemes()
-    const live = list.find((t) => t.role === "main")
-    if (live) {
-      setSelectedThemeId(live.id)
-      setTplStep(2)
-      fetchTemplates(live.id)
-    } else {
-      setSelectedThemeId(null)
-      setTplStep(1)
-    }
-  }, [fetchThemes, fetchTemplates])
-
-  const handleParseRef = useRef<((content?: string) => Promise<void>) | null>(
-    null
-  )
-
-  const handleParse = useCallback(async (content?: string) => {
-    setError("")
-    try {
-      const parsed = parseMediaUrls(content ?? jsonInput)
-      
-      if (parsed.length === 0) {
-        setVideos([])
-        setError("未找到素材文件（视频或图片）")
-        return
-      }
-
-      // 直接可用的 URL 先标记
-      const direct = parsed.map((f) => ({
-        ...f,
-        resolvedUrl: /^https?:\/\//i.test(f.url) ? f.url : null,
-      }))
-
-      // 找出需要通过 API 解析的 shopify:// URL
-      const shopifyUrls = direct.filter((f) => !f.resolvedUrl).map((f) => f.url)
-
-      if (shopifyUrls.length > 0) {
-        if (!storeDomain || !accessToken) {
-          setError("存在 shopify:// 协议的文件，请先配置 API 凭证再解析")
-          setVideos(direct)
+        if (parsed.length === 0) {
+          setVideos([])
+          setError("未找到素材文件（视频或图片）")
           return
         }
 
-        setResolving(true)
-        setVideos(direct) // 先显示列表（shopify:// 的显示加载中）
+        // 直接可用的 URL 先标记
+        const direct = parsed.map((f) => ({
+          ...f,
+          resolvedUrl: /^https?:\/\//i.test(f.url) ? f.url : null,
+        }))
 
-        const failures: string[] = []
+        // 找出需要通过 API 解析的 shopify:// URL
+        const shopifyUrls = direct
+          .filter((f) => !f.resolvedUrl)
+          .map((f) => f.url)
 
-        // 收到一条就点亮一个文件，不等整批
-        const applyResolved = (items: ResolveResult[]) => {
-          if (items.length === 0) return
-          const resolveMap = new Map(items.map((r) => [r.original, r]))
-
-          setVideos((prev) =>
-            prev.map((f) => {
-              if (f.resolvedUrl) return f
-              const hit = resolveMap.get(f.url)
-              if (!hit?.resolved) return f
-              // 保留原始文件名（shopify:// 路径的 basename 就是它）。
-              // 视频的 CDN URL 里是哈希名，千万不能用它反推文件名。
-              return {
-                ...f,
-                resolvedUrl: hit.resolved,
-                name: hit.filename || f.name,
-              }
-            })
-          )
-        }
-
-        const collect = (items: ResolveResult[]) => {
-          for (const item of items) {
-            if (!item.resolved) {
-              failures.push(item.error || `无法解析 ${item.original}`)
-            }
+        if (shopifyUrls.length > 0) {
+          if (!storeDomain || !accessToken) {
+            setError("存在 shopify:// 协议的文件，请先配置 API 凭证再解析")
+            setVideos(direct)
+            return
           }
-          applyResolved(items)
-        }
 
-        try {
-          const res = await fetch("/api/shopify-resolve", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              storeDomain,
-              accessToken,
-              urls: shopifyUrls,
-            }),
-          })
+          setResolving(true)
+          setVideos(direct) // 先显示列表（shopify:// 的显示加载中）
 
-          if (!res.ok) {
-            const data = await res.json().catch(() => ({}))
-            throw new Error(data.error || "解析链接失败")
-          }
-          if (!res.body) throw new Error("解析链接失败")
+          const failures: string[] = []
 
-          // 服务端按 NDJSON 逐行推送。这里读一行点亮一个，所以界面是
-          // 「一个个出现」，而不是全部一起卡到最慢的那个才变亮。
-          const reader = res.body.getReader()
-          const decoder = new TextDecoder()
-          let buffer = ""
+          // 收到一条就点亮一个文件，不等整批
+          const applyResolved = (items: ResolveResult[]) => {
+            if (items.length === 0) return
+            const resolveMap = new Map(items.map((r) => [r.original, r]))
 
-          for (;;) {
-            const { done, value } = await reader.read()
-            if (done) break
-
-            buffer += decoder.decode(value, { stream: true })
-            const lines = buffer.split("\n")
-            buffer = lines.pop() ?? "" // 最后一段可能是半行，留到下一轮
-
-            collect(
-              lines
-                .map((line) => line.trim())
-                .filter(Boolean)
-                .flatMap((line) => {
-                  try {
-                    return [JSON.parse(line) as ResolveResult]
-                  } catch {
-                    return [] // 半行/坏行直接跳过
-                  }
-                })
+            setVideos((prev) =>
+              prev.map((f) => {
+                if (f.resolvedUrl) return f
+                const hit = resolveMap.get(f.url)
+                if (!hit?.resolved) return f
+                // 保留原始文件名（shopify:// 路径的 basename 就是它）。
+                // 视频的 CDN URL 里是哈希名，千万不能用它反推文件名。
+                return {
+                  ...f,
+                  resolvedUrl: hit.resolved,
+                  name: hit.filename || f.name,
+                }
+              }),
             )
           }
 
-          // 收尾：最后一行可能没有以换行结束
-          const tail = buffer.trim()
-          if (tail) {
-            try {
-              const item = JSON.parse(tail) as ResolveResult
-              collect([item])
-            } catch {
-              // 不完整的一行，忽略
+          const collect = (items: ResolveResult[]) => {
+            for (const item of items) {
+              if (!item.resolved) {
+                failures.push(item.error || `无法解析 ${item.original}`)
+              }
             }
+            applyResolved(items)
           }
 
-          if (failures.length > 0) setError(failures.join("\n\n"))
-        } catch (err) {
-          setError(err instanceof Error ? err.message : "解析链接失败")
-        } finally {
-          setResolving(false)
+          try {
+            const res = await fetch("/api/shopify-resolve", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                storeDomain,
+                accessToken,
+                urls: shopifyUrls,
+              }),
+            })
+
+            if (!res.ok) {
+              const data = await res.json().catch(() => ({}))
+              throw new Error(data.error || "解析链接失败")
+            }
+            if (!res.body) throw new Error("解析链接失败")
+
+            // 服务端按 NDJSON 逐行推送。这里读一行点亮一个，所以界面是
+            // 「一个个出现」，而不是全部一起卡到最慢的那个才变亮。
+            const reader = res.body.getReader()
+            const decoder = new TextDecoder()
+            let buffer = ""
+
+            for (;;) {
+              const { done, value } = await reader.read()
+              if (done) break
+
+              buffer += decoder.decode(value, { stream: true })
+              const lines = buffer.split("\n")
+              buffer = lines.pop() ?? "" // 最后一段可能是半行，留到下一轮
+
+              collect(
+                lines
+                  .map((line) => line.trim())
+                  .filter(Boolean)
+                  .flatMap((line) => {
+                    try {
+                      return [JSON.parse(line) as ResolveResult]
+                    } catch {
+                      return [] // 半行/坏行直接跳过
+                    }
+                  }),
+              )
+            }
+
+            // 收尾：最后一行可能没有以换行结束
+            const tail = buffer.trim()
+            if (tail) {
+              try {
+                const item = JSON.parse(tail) as ResolveResult
+                collect([item])
+              } catch {
+                // 不完整的一行，忽略
+              }
+            }
+
+            if (failures.length > 0) setError(failures.join("\n\n"))
+          } catch (err) {
+            setError(err instanceof Error ? err.message : "解析链接失败")
+          } finally {
+            setResolving(false)
+          }
+        } else {
+          setVideos(direct)
         }
-      } else {
-        setVideos(direct)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "解析失败")
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "解析失败")
-    }
-  }, [jsonInput, storeDomain, accessToken])
-  handleParseRef.current = handleParse
+    },
+    [jsonInput, storeDomain, accessToken],
+  )
 
   const handleToggle = useCallback((url: string) => {
     setVideos((prev) =>
-      prev.map((v) => (v.url === url ? { ...v, selected: !v.selected } : v))
+      prev.map((v) => (v.url === url ? { ...v, selected: !v.selected } : v)),
     )
   }, [])
 
@@ -913,10 +304,10 @@ export default function Page() {
   const handleToggleType = useCallback(
     (type: "video" | "image", select: boolean) => {
       setVideos((prev) =>
-        prev.map((v) => (v.type === type ? { ...v, selected: select } : v))
+        prev.map((v) => (v.type === type ? { ...v, selected: select } : v)),
       )
     },
-    []
+    [],
   )
 
   const selectedCount = videos.filter((v) => v.selected).length
@@ -925,11 +316,11 @@ export default function Page() {
 
   const videoList = useMemo(
     () => videos.filter((v) => v.type === "video"),
-    [videos]
+    [videos],
   )
   const imageList = useMemo(
     () => videos.filter((v) => v.type === "image"),
-    [videos]
+    [videos],
   )
 
   const handleDownload = useCallback(async () => {
@@ -962,7 +353,7 @@ export default function Page() {
             : JSON.stringify(data.details)
           : ""
         throw new Error(
-          `${data.error}${errorDetails ? ":\n" + errorDetails : ""}`
+          `${data.error}${errorDetails ? ":\n" + errorDetails : ""}`,
         )
       }
       const blob = await response.blob()
@@ -1012,11 +403,13 @@ export default function Page() {
     setPreviewUrl(null)
   }, [])
 
-  const handleDialogOpenChange = useCallback(
-    (open: boolean) => {
-      if (!open) closePreview()
+  /** 从主题获取 —— 获取到内容后自动填入并解析 */
+  const handleTemplateFilled = useCallback(
+    (content: string) => {
+      setJsonInput(content)
+      handleParse(content)
     },
-    [closePreview]
+    [handleParse],
   )
 
   // ── Loading skeleton ────────────────────────────────────────────────
@@ -1206,7 +599,7 @@ export default function Page() {
                 size="sm"
                 className="h-7 gap-1.5 text-xs"
                 disabled={!storeDomain || !accessToken}
-                onClick={openTemplateDialog}
+                onClick={() => setTplDialogOpen(true)}
               >
                 <svg
                   className="h-3.5 w-3.5"
@@ -1284,7 +677,7 @@ export default function Page() {
               <line x1="12" x2="12" y1="8" y2="12" />
               <line x1="12" x2="12.01" y1="16" y2="16" />
             </svg>
-            <p className="text-sm whitespace-pre-wrap text-destructive">
+            <p className="whitespace-pre-wrap text-sm text-destructive">
               {error}
             </p>
           </div>
@@ -1429,326 +822,26 @@ export default function Page() {
                   </div>
                 </div>
               )}
-
             </CardContent>
           </Card>
         )}
       </main>
 
       {/* ── 预览 Dialog ──────────────────────────────────────────────── */}
-      <Dialog open={!!previewFile} onOpenChange={handleDialogOpenChange}>
-        <DialogContent
-          className="gap-0 overflow-hidden border-0 bg-card p-0 shadow-2xl sm:max-w-5xl"
-          showCloseButton={false}
-        >
-          {/* 顶栏 */}
-          <div className="flex items-center justify-between border-b border-border/50 bg-card/80 px-4 py-2.5 backdrop-blur-sm">
-            <div className="flex min-w-0 items-center gap-2">
-              <span
-                className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded ${
-                  previewFile?.type === "video"
-                    ? "bg-blue-500/10 text-blue-500"
-                    : "bg-emerald-500/10 text-emerald-500"
-                }`}
-              >
-                {previewFile?.type === "video" ? (
-                  <IconVideo className="h-3 w-3" />
-                ) : (
-                  <IconImage className="h-3 w-3" />
-                )}
-              </span>
-              <span className="truncate text-xs font-medium text-foreground/80">
-                {previewFile?.name}
-              </span>
-            </div>
-            <DialogClose
-              render={
-                <button className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground" />
-              }
-            >
-              <svg
-                className="h-3.5 w-3.5"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M18 6 6 18" />
-                <path d="m6 6 12 12" />
-              </svg>
-            </DialogClose>
-          </div>
-
-          {/* 媒体内容 */}
-          <div className="flex items-center justify-center bg-black/[0.03] dark:bg-white/[0.03]">
-            {previewUrl ? (
-              previewFile?.type === "video" ? (
-                <video
-                  src={previewUrl}
-                  controls
-                  autoPlay
-                  className="max-h-[80vh] w-full object-contain"
-                />
-              ) : (
-                <img
-                  src={previewUrl}
-                  alt={previewFile?.name}
-                  className="max-h-[80vh] w-full object-contain"
-                />
-              )
-            ) : (
-              <div className="flex flex-col items-center gap-2 py-20 text-muted-foreground/50">
-                {previewFile?.type === "video" ? (
-                  <IconVideo className="h-8 w-8" />
-                ) : (
-                  <IconImage className="h-8 w-8" />
-                )}
-                <span className="text-xs">无法加载</span>
-              </div>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
+      <PreviewDialog
+        file={previewFile}
+        previewUrl={previewUrl}
+        onClose={closePreview}
+      />
 
       {/* ── 主题模板 Dialog ─────────────────────────────────────────── */}
-      <Dialog
+      <TemplateDialog
         open={tplDialogOpen}
-        onOpenChange={(open) => {
-          if (!open) setTplDialogOpen(false)
-        }}
-      >
-        <DialogContent
-          className="gap-0 overflow-hidden border-border/50 p-0 shadow-2xl sm:max-w-2xl"
-          showCloseButton={false}
-        >
-          {/* 标题 */}
-          <div className="flex items-center gap-2.5 border-b border-border/50 px-5 py-3.5">
-            <svg
-              className="h-4 w-4 text-muted-foreground"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="7 10 12 15 17 10" />
-              <line x1="12" x2="12" y1="15" y2="3" />
-            </svg>
-            <span className="text-sm font-medium">从主题获取模板</span>
-            <span className="ml-auto rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-              {tplStep} / 3
-            </span>
-          </div>
-
-          {/* 内容 */}
-          <div className="overflow-hidden px-4 py-4">
-            {tplError && (
-              <div className="mb-3 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-                {tplError}
-              </div>
-            )}
-
-            {/* Step 1: 选主题 */}
-            {tplStep === 1 && (
-              <div className="space-y-3">
-                <p className="text-xs text-muted-foreground">选择一个主题</p>
-                {tplLoading && sortedThemes.length === 0 ? (
-                  <div className="flex items-center justify-center gap-2 py-8 text-xs text-muted-foreground">
-                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
-                    加载主题列表...
-                  </div>
-                ) : sortedThemes.length === 0 ? (
-                  <p className="py-8 text-center text-xs text-muted-foreground">
-                    未找到主题
-                  </p>
-                ) : (
-                  <div className="max-h-72 space-y-1 overflow-y-auto">
-                    {sortedThemes.map((theme) => (
-                      <button
-                        key={theme.id}
-                        type="button"
-                        className={`flex w-full max-w-full items-center gap-3 overflow-hidden rounded-lg border px-3 py-2.5 text-left transition-colors ${
-                          selectedThemeId === theme.id
-                            ? "border-primary bg-primary/5"
-                            : "border-transparent hover:bg-muted/50"
-                        }`}
-                        onClick={() => setSelectedThemeId(theme.id)}
-                      >
-                        <span className="min-w-0 flex-1 truncate text-sm">
-                          {theme.name}
-                        </span>
-                        <span
-                          className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                            theme.role === "main"
-                              ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                              : "bg-muted text-muted-foreground"
-                          }`}
-                        >
-                          {theme.role === "main" ? "Live" : theme.role}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Step 2: 选模板 */}
-            {tplStep === 2 && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs text-muted-foreground">
-                    选择模板
-                    {selectedThemeId && (
-                      <span className="ml-1 text-muted-foreground/50">
-                        · {themes.find((t) => t.id === selectedThemeId)?.name}
-                      </span>
-                    )}
-                  </p>
-                </div>
-
-                {/* 搜索框 */}
-                <div className="relative">
-                  <svg
-                    className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/50"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <circle cx="11" cy="11" r="8" />
-                    <path d="m21 21-4.3-4.3" />
-                  </svg>
-                  <Input
-                    value={tplSearch}
-                    onChange={(e) => setTplSearch(e.target.value)}
-                    placeholder="搜索模板..."
-                    className="h-8 pl-8 text-xs"
-                  />
-                </div>
-
-                {tplLoading ? (
-                  <div className="flex items-center justify-center gap-2 py-8 text-xs text-muted-foreground">
-                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
-                    加载模板列表...
-                  </div>
-                ) : templateKeys.length === 0 ? (
-                  <p className="py-8 text-center text-xs text-muted-foreground">
-                    未找到模板
-                  </p>
-                ) : (() => {
-                  const q = tplSearch.toLowerCase()
-                  const filtered = q
-                    ? templateKeys.filter(
-                        (k) =>
-                          k.toLowerCase().includes(q) ||
-                          templateLabel(k).toLowerCase().includes(q)
-                      )
-                    : templateKeys
-
-                  return filtered.length === 0 ? (
-                    <p className="py-8 text-center text-xs text-muted-foreground">
-                      无匹配模板
-                    </p>
-                  ) : (
-                    <div className="max-h-60 space-y-1 overflow-x-hidden overflow-y-auto">
-                      {filtered.map((key) => (
-                        <button
-                          key={key}
-                          type="button"
-                          className={`flex w-full max-w-full flex-col  gap-1 overflow-hidden rounded-lg border px-3 py-2 text-left transition-colors ${
-                            selectedKey === key
-                              ? "border-primary bg-primary/5"
-                              : "border-transparent hover:bg-muted/50"
-                          }`}
-                          onClick={() => setSelectedKey(key)}
-                        >
-                          <span className="min-w-0 max-w-full truncate text-sm">
-                            {templateLabel(key)}
-                          </span>
-                          <span className="hidden min-w-0 max-w-full shrink truncate font-mono text-[10px] text-muted-foreground/50 sm:block">
-                            {key}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  )
-                })()}
-              </div>
-            )}
-
-            {/* Step 3: 加载中 */}
-            {tplStep === 3 && (
-              <div className="flex flex-col items-center gap-3 py-10">
-                <span className="h-6 w-6 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
-                <span className="text-xs text-muted-foreground">
-                  正在获取模板内容...
-                </span>
-              </div>
-            )}
-          </div>
-
-          {/* 底部按钮 */}
-          <div className="flex items-center justify-between border-t border-border/50 px-5 py-3">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 text-xs"
-              onClick={() => {
-                if (tplStep === 2) {
-                  setTplStep(1)
-                  setSelectedKey(null)
-                  setTplSearch("")
-                  setTplError("")
-                } else {
-                  setTplDialogOpen(false)
-                }
-              }}
-            >
-              {tplStep === 2 ? "上一步" : "取消"}
-            </Button>
-
-            {tplStep === 1 && (
-              <Button
-                size="sm"
-                className="h-7 gap-1.5 text-xs"
-                disabled={!selectedThemeId || tplLoading}
-                onClick={() => {
-                  if (selectedThemeId) {
-                    setTplStep(2)
-                    setTplSearch("")
-                    fetchTemplates(selectedThemeId)
-                  }
-                }}
-              >
-                下一步
-              </Button>
-            )}
-
-            {tplStep === 2 && (
-              <Button
-                size="sm"
-                className="h-7 gap-1.5 text-xs"
-                disabled={!selectedKey || tplLoading}
-                onClick={() => {
-                  if (selectedThemeId && selectedKey) {
-                    setTplStep(3)
-                    fetchTemplateContent(selectedThemeId, selectedKey)
-                  }
-                }}
-              >
-                获取并填入
-              </Button>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
+        onOpenChange={setTplDialogOpen}
+        storeDomain={storeDomain}
+        accessToken={accessToken}
+        onFilled={handleTemplateFilled}
+      />
     </div>
   )
 }
