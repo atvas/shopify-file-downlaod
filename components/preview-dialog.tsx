@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef, useCallback } from "react"
+import { useState, useRef, useCallback, useEffect } from "react"
 import type { MediaFile } from "@/lib/types"
 import { IconVideo, IconImage } from "@/components/icons"
 import {
@@ -21,13 +21,20 @@ export function PreviewDialog({
   const [loaded, setLoaded] = useState(false)
   const [displayUrl, setDisplayUrl] = useState<string | null>(null)
   const displayUrlRef = useRef<string | null>(null)
+  const prevFileRef = useRef<MediaFile | null>(null)
 
-  // 渲染阶段同步：打开新预览时立即更新 displayUrl，关闭时保持不变
-  if (previewUrl && previewUrl !== displayUrlRef.current) {
-    displayUrlRef.current = previewUrl
-    setLoaded(false)
-    setDisplayUrl(previewUrl)
-  }
+  // 新文件打开时重置 displayUrl；关闭时不动（动画期间保持媒体可见）
+  useEffect(() => {
+    if (file && file !== prevFileRef.current) {
+      prevFileRef.current = file
+      displayUrlRef.current = previewUrl
+      setDisplayUrl(previewUrl)
+      setLoaded(false)
+    }
+    if (!file) {
+      prevFileRef.current = null
+    }
+  }, [file, previewUrl])
 
   // 只通知父组件，不碰 displayUrl——动画期间媒体 src 保持有效
   const handleOpenChange = useCallback(

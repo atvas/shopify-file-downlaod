@@ -4,7 +4,6 @@ import { useState, useCallback, useEffect, useMemo, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardTitle } from "@/components/ui/card"
 import {
   Select,
@@ -31,16 +30,47 @@ import {
   IconCheck,
   IconChevronDown,
 } from "@/components/icons"
+import { Badge } from "@/components/ui/badge"
 import { MediaCard } from "@/components/media-card"
 import {
   Progress,
   ProgressLabel,
   ProgressValue,
 } from "@/components/ui/progress"
-import { TemplateDialog } from "@/components/template-dialog"
+import {
+  Combobox,
+  ComboboxInput,
+  ComboboxContent,
+  ComboboxList,
+  ComboboxItem,
+  ComboboxEmpty,
+} from "@/components/ui/combobox"
 import { PreviewDialog } from "@/components/preview-dialog"
 
 // ── 主页面 ──────────────────────────────────────────────────────────────
+
+const TEMPLATE_NAMES: Record<string, string> = {
+  "templates/index.json": "首页",
+  "templates/product.json": "商品页",
+  "templates/collection.json": "集合页",
+  "templates/collections.json": "集合列表",
+  "templates/page.json": "页面",
+  "templates/cart.json": "购物车",
+  "templates/blog.json": "博客",
+  "templates/article.json": "文章",
+  "templates/list-collections.json": "集合列表",
+  "templates/search.json": "搜索页",
+  "templates/404.json": "404 页面",
+  "templates/password.json": "密码页",
+}
+
+function templateLabel(key: string) {
+  if (TEMPLATE_NAMES[key]) return TEMPLATE_NAMES[key]
+  return key
+    .replace(/^templates\//, "")
+    .replace(/^sections\//, "section/")
+    .replace(/\.json$/, "")
+}
 
 /** 触发浏览器保存文件 */
 function triggerSave(blob: Blob, fileName: string) {
@@ -55,7 +85,6 @@ function triggerSave(blob: Blob, fileName: string) {
 }
 
 export default function Page() {
-  const [jsonInput, setJsonInput] = useState("")
   const [videos, setVideos] = useState<MediaFile[]>([])
   const [error, setError] = useState("")
   const [downloading, setDownloading] = useState(false)
@@ -71,8 +100,15 @@ export default function Page() {
   const [previewFile, setPreviewFile] = useState<MediaFile | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
 
-  // 主题模板 Dialog
-  const [tplDialogOpen, setTplDialogOpen] = useState(false)
+  // 主题 / 模板选择
+  const [themes, setThemes] = useState<
+    { id: number; name: string; role: string; updatedAt: string }[]
+  >([])
+  const [selectedThemeId, setSelectedThemeId] = useState<number | null>(null)
+  const [templateKeys, setTemplateKeys] = useState<string[]>([])
+  const [selectedKey, setSelectedKey] = useState<string | null>(null)
+  const [loadingThemes, setLoadingThemes] = useState(false)
+  const [loadingTemplates, setLoadingTemplates] = useState(false)
 
   const [savedConfigs, setSavedConfigs] = useState<SavedConfig[]>([])
   const [selectedConfigId, setSelectedConfigId] = useState("")
@@ -175,10 +211,10 @@ export default function Page() {
   const [resolving, setResolving] = useState(false)
 
   const handleParse = useCallback(
-    async (content?: string) => {
+    async (content: string) => {
       setError("")
       try {
-        const parsed = parseMediaUrls(content ?? jsonInput)
+        const parsed = parseMediaUrls(content)
 
         if (parsed.length === 0) {
           setVideos([])
@@ -308,7 +344,7 @@ export default function Page() {
         setError(err instanceof Error ? err.message : "解析失败")
       }
     },
-    [jsonInput, storeDomain, accessToken],
+    [storeDomain, accessToken],
   )
 
   const handleToggle = useCallback((url: string) => {
@@ -337,6 +373,18 @@ export default function Page() {
   const selectedCount = videos.filter((v) => v.selected).length
   const videoCount = videos.filter((v) => v.type === "video").length
   const imageCount = videos.filter((v) => v.type === "image").length
+
+  const sortedThemes = useMemo(
+    () =>
+      [...themes].sort((a, b) => {
+        if (a.role === "main" && b.role !== "main") return -1
+        if (a.role !== "main" && b.role === "main") return 1
+        return (
+          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+        )
+      }),
+    [themes],
+  )
 
   const videoList = useMemo(
     () => videos.filter((v) => v.type === "video"),
@@ -507,13 +555,126 @@ export default function Page() {
     // onOpenChange(false) 回调触发。
   }, [])
 
-  /** 从主题获取 —— 获取到内容后自动填入并解析 */
-  const handleTemplateFilled = useCallback(
-    (content: string) => {
-      setJsonInput(content)
-      handleParse(content)
+  // ── 主题 / 模板获取 ─────────────────────────────────────────────────
+
+  const fetchTemplates = useCallback(
+    async (themeId: number) => {
+      setLoadingTemplates(true)
+      setError("")
+      setTemplateKeys([])
+      setSelectedKey(null)
+      try {
+        const res = await fetch("/api/shopify-templates", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            storeDomain,
+            accessToken,
+            action: "list-templates",
+            themeId,
+          }),
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || "获取模板列表失败")
+        setTemplateKeys(data.keys ?? [])
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "获取模板列表失败")
+      } finally {
+        setLoadingTemplates(false)
+      }
     },
-    [handleParse],
+    [storeDomain, accessToken],
+  )
+
+  const fetchThemes = useCallback(async () => {
+    setLoadingThemes(true)
+    setError("")
+    try {
+      const res = await fetch("/api/shopify-templates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storeDomain,
+          accessToken,
+          action: "list-themes",
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "获取主题失败")
+      const list: {
+        id: number
+        name: string
+        role: string
+        updatedAt: string
+      }[] = (data.themes ?? []).filter(
+        (t: { role: string }) => t.role !== "development",
+      )
+      setThemes(list)
+      // 自动选中 live 主题
+      const live = list.find((t) => t.role === "main")
+      if (live) {
+        setSelectedThemeId(live.id)
+        fetchTemplates(live.id)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "获取主题失败")
+    } finally {
+      setLoadingThemes(false)
+    }
+  }, [storeDomain, accessToken, fetchTemplates])
+
+  /** 选择模板后自动获取内容并解析 */
+  const handleSelectTemplate = useCallback(
+    async (key: string | null) => {
+      if (!key) return
+      setSelectedKey(key)
+      if (!selectedThemeId) return
+      setVideos([])
+      setResolving(true)
+      setError("")
+      try {
+        const res = await fetch("/api/shopify-templates", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            storeDomain,
+            accessToken,
+            action: "get-template",
+            themeId: selectedThemeId,
+            key,
+          }),
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || "获取模板内容失败")
+        const content: string = data.content ?? ""
+        await handleParse(content)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "获取模板内容失败")
+      } finally {
+        setResolving(false)
+      }
+    },
+    [selectedThemeId, storeDomain, accessToken, handleParse],
+  )
+
+  // API 配置有效时自动拉取主题列表
+  const isConfigured = !!storeDomain && !!accessToken
+  const prevConfiguredRef = useRef(false)
+  useEffect(() => {
+    if (isConfigured && !prevConfiguredRef.current) {
+      fetchThemes()
+    }
+    prevConfiguredRef.current = isConfigured
+  }, [isConfigured, fetchThemes])
+
+  const handleSelectTheme = useCallback(
+    (id: string | null) => {
+      if (!id) return
+      const themeId = Number(id)
+      setSelectedThemeId(themeId)
+      fetchTemplates(themeId)
+    },
+    [fetchTemplates],
   )
 
   // ── Loading skeleton ────────────────────────────────────────────────
@@ -524,9 +685,6 @@ export default function Page() {
       </div>
     )
   }
-
-  // ── 已配置状态的摘要 ────────────────────────────────────────────────
-  const isConfigured = !!storeDomain && !!accessToken
 
   return (
     <div className="relative min-h-screen bg-background">
@@ -567,13 +725,9 @@ export default function Page() {
           >
             <div className="flex items-center gap-3">
               <span
-                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
-                  isConfigured
-                    ? "bg-emerald-500 text-white"
-                    : "bg-foreground text-background"
-                }`}
+                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold bg-foreground text-background`}
               >
-                {isConfigured ? <IconCheck className="h-3.5 w-3.5" /> : "1"}
+               1
               </span>
               <div>
                 <CardTitle className="text-sm">API 配置</CardTitle>
@@ -683,86 +837,128 @@ export default function Page() {
           )}
         </Card>
 
-        {/* ── Step 2: JSON 输入 ────────────────────────────────────────── */}
+        {/* ── Step 2: 选择主题 & 模板 ─────────────────────────────────── */}
         <Card className="border-border/50 shadow-sm">
           <CardContent className="space-y-4 px-6 py-5">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-xs font-bold text-background">
-                  2
-                </span>
-                <div>
-                  <p className="text-sm font-medium">粘贴 JSON 模板</p>
-                  <p className="text-xs text-muted-foreground">
-                    手动粘贴，或从主题 API 直接获取
-                  </p>
-                </div>
+            <div className="flex items-center gap-3">
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-xs font-bold text-background">
+                2
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium">获取模板素材</p>
+                <p className="text-xs text-muted-foreground">
+                  {resolving
+                    ? "正在解析素材..."
+                    : videos.length > 0
+                      ? `已解析 ${videos.length} 个文件`
+                      : "选择主题和模板，自动解析素材"}
+                </p>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 gap-1.5 text-xs"
-                disabled={!storeDomain || !accessToken}
-                onClick={() => setTplDialogOpen(true)}
-              >
-                <svg
-                  className="h-3.5 w-3.5"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                  <polyline points="7 10 12 15 17 10" />
-                  <line x1="12" x2="12" y1="15" y2="3" />
-                </svg>
-                从主题获取
-              </Button>
+              {(loadingThemes || loadingTemplates || resolving) && (
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
+              )}
             </div>
 
-            <Textarea
-              value={jsonInput}
-              onChange={(e) => setJsonInput(e.target.value)}
-              placeholder='{ "video_url": "shopify://files/videos/example.mp4", "image": "https://cdn.shopify.com/.../image.png" }'
-              className="max-h-60 min-h-24 resize-y font-mono text-xs leading-relaxed"
-            />
+            {/* 主题选择 */}
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">主题</Label>
+              {loadingThemes ? (
+                <div className="flex h-9 items-center rounded-md border border-input bg-muted/30 px-3 text-xs text-muted-foreground">
+                  加载主题列表...
+                </div>
+              ) : sortedThemes.length > 0 ? (
+                <Select
+                  value={selectedThemeId?.toString() ?? ""}
+                  onValueChange={handleSelectTheme}
+                >
+                  <SelectTrigger className="w-full py-4">
+                    <SelectValue placeholder="选择主题">
+                      {(value) =>
+                        themes.find((t) => t.id.toString() === value)?.name ??
+                        value
+                      }
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent
+                    align="center"
+                    alignItemWithTrigger={false}
+                    className="max-h-72 px-2 py-2"
+                  >
+                    {sortedThemes.map((theme) => (
+                      <SelectItem
+                        key={theme.id}
+                        value={theme.id.toString()}
+                        className="p-2.5 pr-10"
+                      >
+                        <div className="w-full flex  gap-2">
+                          <span>{theme.name}</span>
+                          <Badge
+                            variant="secondary"
+                            className={
+                              theme.role === "main"
+                                ? "bg-[#affebf] text-black dark:text-emerald-400 text-[10px]"
+                                : "text-[#666666] text-[10px]"
+                            }
+                          >
+                            {theme.role === "main" ? "Live" : theme.role}
+                          </Badge>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : isConfigured ? (
+                <div className="flex h-9 items-center rounded-md border border-input bg-muted/30 px-3 text-xs text-muted-foreground">
+                  未找到主题
+                </div>
+              ) : null}
+            </div>
 
-            <div className="flex items-center gap-3">
-              <Button
-                onClick={() => handleParse()}
-                disabled={resolving}
-                className="gap-2"
-              >
-                {resolving ? (
-                  <>
-                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" />
-                    解析链接中...
-                  </>
-                ) : (
-                  <>
-                    <svg
-                      className="h-4 w-4"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <circle cx="11" cy="11" r="8" />
-                      <path d="m21 21-4.3-4.3" />
-                    </svg>
-                    解析素材
-                  </>
-                )}
-              </Button>
-              {videos.length > 0 && (
-                <span className="text-xs text-muted-foreground">
-                  已解析 {videos.length} 个文件
-                </span>
-              )}
+            {/* 模板选择（带搜索） */}
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">模板</Label>
+              {loadingTemplates ? (
+                <div className="flex h-9 items-center rounded-md border border-input bg-muted/30 px-3 text-xs text-muted-foreground">
+                  加载模板列表...
+                </div>
+              ) : templateKeys.length > 0 ? (
+                <Combobox
+                  value={selectedKey}
+                  onValueChange={(v) => handleSelectTemplate(v as string)}
+                  items={templateKeys}
+                  itemToStringLabel={(key) => templateLabel(key)}
+                >
+                  <ComboboxInput
+                    placeholder="搜索模板..."
+                    className="h-9"
+                  />
+                  <ComboboxContent className="max-h-72 px-2 py-2">
+                    <ComboboxList>
+                      {(key: string) => (
+                        <ComboboxItem
+                          key={key}
+                          value={key}
+                          className="p-2.5 pr-10"
+                        >
+                          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                            <span className="truncate text-sm">
+                              {templateLabel(key)}
+                            </span>
+                            <span className="truncate font-mono text-[11px] text-muted-foreground/60">
+                              {key.replace(/^templates\//, "")}
+                            </span>
+                          </div>
+                        </ComboboxItem>
+                      )}
+                    </ComboboxList>
+                    <ComboboxEmpty>无匹配模板</ComboboxEmpty>
+                  </ComboboxContent>
+                </Combobox>
+              ) : selectedThemeId ? (
+                <div className="flex h-9 items-center rounded-md border border-input bg-muted/30 px-3 text-xs text-muted-foreground">
+                  未找到模板
+                </div>
+              ) : null}
             </div>
           </CardContent>
         </Card>
@@ -788,10 +984,31 @@ export default function Page() {
         )}
 
         {/* ── 素材列表 ───────────────────────────────────────────────── */}
-        {videos.length > 0 && (
+        {(videos.length > 0 || resolving) && (
           <Card className="border-border/50 shadow-sm">
             <CardContent className="space-y-5 px-6 py-5">
-              {/* 标题行 */}
+              {resolving && videos.length === 0 ? (
+                <div className="space-y-3 py-4">
+                  <div className="flex items-center gap-3">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-xs font-bold text-background">
+                      3
+                    </span>
+                    <span className="text-sm font-medium text-muted-foreground">
+                      正在解析素材...
+                    </span>
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
+                  </div>
+                  <div className="space-y-2 pl-10">
+                    {Array.from({ length: 4 }).map((_, i) => (
+                      <div
+                        key={i}
+                        className="h-10 animate-pulse rounded-md bg-muted/50"
+                      />
+                    ))}
+                  </div>
+                </div>
+              ) : (
+              <>
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
                   <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-xs font-bold text-background">
@@ -954,6 +1171,8 @@ export default function Page() {
                   </div>
                 </div>
               )}
+              </>
+              )}
             </CardContent>
           </Card>
         )}
@@ -966,14 +1185,6 @@ export default function Page() {
         onClose={closePreview}
       />
 
-      {/* ── 主题模板 Dialog ─────────────────────────────────────────── */}
-      <TemplateDialog
-        open={tplDialogOpen}
-        onOpenChange={setTplDialogOpen}
-        storeDomain={storeDomain}
-        accessToken={accessToken}
-        onFilled={handleTemplateFilled}
-      />
     </div>
   )
 }

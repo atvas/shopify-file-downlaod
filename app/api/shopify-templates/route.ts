@@ -46,11 +46,17 @@ export async function POST(request: Request) {
         }
         const data = await res.json()
         const themes = (data.themes ?? []).map(
-          (t: { id: number; name: string; role: string }) => ({
+          (t: {
+            id: number
+            name: string
+            role: string
+            updated_at: string
+          }) => ({
             id: t.id,
             name: t.name,
             role: t.role,
-          })
+            updatedAt: t.updated_at,
+          }),
         )
         return NextResponse.json({ themes })
       }
