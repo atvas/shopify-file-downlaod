@@ -23,6 +23,7 @@ import {
   getLastUsedConfigFromStorage,
 } from "@/lib/types"
 import { parseMediaUrls } from "@/lib/parse"
+import JSZip from "jszip"
 import {
   IconVideo,
   IconImage,
@@ -35,11 +36,28 @@ import { TemplateDialog } from "@/components/template-dialog"
 import { PreviewDialog } from "@/components/preview-dialog"
 
 // ── 主页面 ──────────────────────────────────────────────────────────────
+
+/** 触发浏览器保存文件 */
+function triggerSave(blob: Blob, fileName: string) {
+  const url = window.URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = fileName
+  document.body.appendChild(a)
+  a.click()
+  window.URL.revokeObjectURL(url)
+  document.body.removeChild(a)
+}
+
 export default function Page() {
   const [jsonInput, setJsonInput] = useState("")
   const [videos, setVideos] = useState<MediaFile[]>([])
   const [error, setError] = useState("")
   const [downloading, setDownloading] = useState(false)
+  const [downloadProgress, setDownloadProgress] = useState<{
+    current: number
+    total: number
+  } | null>(null)
   const [mounted, setMounted] = useState(false)
   const [configExpanded, setConfigExpanded] = useState(true)
 
@@ -330,9 +348,9 @@ export default function Page() {
       setError("请先填写店铺域名和 API Token")
       return
     }
-    setDownloading(true)
-    setError("")
-    try {
+
+    /** 服务端回退：走 /api/shopify-videos（当客户端 CORS 被拦截时） */
+    const serverFallback = async () => {
       const response = await fetch("/api/shopify-videos", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -357,21 +375,81 @@ export default function Page() {
         )
       }
       const blob = await response.blob()
-      const url = window.URL.createObjectURL(blob)
-      const a = document.createElement("a")
-      a.href = url
-      a.download =
+      triggerSave(
+        blob,
         selected.length === 1
           ? selected[0].name
-          : `shopify-assets-${Date.now()}.zip`
-      document.body.appendChild(a)
-      a.click()
-      window.URL.revokeObjectURL(url)
-      document.body.removeChild(a)
+          : `shopify-assets-${Date.now()}.zip`,
+      )
+    }
+
+    setDownloading(true)
+    setDownloadProgress(null)
+    setError("")
+    try {
+      if (selected.length === 1) {
+        // ── 单文件：客户端直接下载 ──
+        const file = selected[0]
+        const url = file.resolvedUrl || file.url
+        try {
+          const res = await fetch(url)
+          if (!res.ok) throw new Error(`${res.status}`)
+          const blob = await res.blob()
+          triggerSave(blob, file.name)
+        } catch {
+          // CORS 或网络失败，走服务端回退
+          await serverFallback()
+        }
+      } else {
+        // ── 多文件：客户端逐个下载 + 打包 ZIP ──
+        setDownloadProgress({ current: 0, total: selected.length })
+        const zip = new JSZip()
+        const errors: string[] = []
+        let clientFailed = false
+
+        for (let i = 0; i < selected.length; i++) {
+          const file = selected[i]
+          setDownloadProgress({
+            current: i + 1,
+            total: selected.length,
+          })
+          const url = file.resolvedUrl || file.url
+          try {
+            const res = await fetch(url)
+            if (!res.ok) {
+              errors.push(`${file.name}: HTTP ${res.status}`)
+              continue
+            }
+            const buf = await res.arrayBuffer()
+            zip.file(file.name, buf)
+          } catch (fetchErr) {
+            // 第一个文件就 CORS 失败，直接走服务端回退
+            if (i === 0) {
+              clientFailed = true
+              break
+            }
+            errors.push(
+              `${file.name}: ${fetchErr instanceof Error ? fetchErr.message : "下载失败"}`,
+            )
+          }
+        }
+
+        if (clientFailed) {
+          await serverFallback()
+          return
+        }
+
+        if (errors.length > 0) {
+          zip.file("下载失败记录.txt", errors.join("\n\n"))
+        }
+        const zipBlob = await zip.generateAsync({ type: "blob" })
+        triggerSave(zipBlob, `shopify-assets-${Date.now()}.zip`)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "下载失败")
     } finally {
       setDownloading(false)
+      setDownloadProgress(null)
     }
   }, [videos, storeDomain, accessToken])
 
@@ -739,7 +817,9 @@ export default function Page() {
                     ) : (
                       <IconDownload className="h-3.5 w-3.5" />
                     )}
-                    下载
+                    {downloadProgress
+                      ? `下载中 (${downloadProgress.current}/${downloadProgress.total})`
+                      : "下载"}
                     {selectedCount > 0 && (
                       <span className="rounded-full bg-primary-foreground/20 px-1.5 py-px text-[10px] font-medium">
                         {selectedCount}
