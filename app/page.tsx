@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useEffect, useMemo } from "react"
+import { useState, useCallback, useEffect, useMemo, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -248,6 +248,203 @@ function IconImage({ className = "w-4 h-4" }: { className?: string }) {
   )
 }
 
+function MediaCard({
+  file,
+  onToggle,
+  onPreview,
+}: {
+  file: MediaFile
+  onToggle: () => void
+  onPreview: () => void
+}) {
+  return (
+    <div
+      className="group relative cursor-pointer overflow-hidden rounded-xl border border-border/60 bg-card transition-all duration-200 hover:border-border hover:shadow-lg hover:shadow-black/5"
+      onClick={onToggle}
+    >
+      {/* 缩略图 */}
+      <div className="relative aspect-square overflow-hidden bg-muted/30">
+        {file.type === "image" ? (
+          file.resolvedUrl ? (
+            <img
+              src={
+                file.resolvedUrl.includes("cdn.shopify.com")
+                  ? file.resolvedUrl +
+                    (file.resolvedUrl.includes("?") ? "&" : "?") +
+                    "width=400"
+                  : file.resolvedUrl
+              }
+              alt={file.name}
+              className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.03]"
+              loading="lazy"
+            />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center">
+              <span className="h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
+            </div>
+          )
+        ) : file.resolvedUrl ? (
+          <VideoThumbnail src={file.resolvedUrl} name={file.name} />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center">
+            <span className="h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
+          </div>
+        )}
+
+        {/* hover 底部渐变遮罩 + 预览按钮 */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/40 to-transparent opacity-0 transition-opacity duration-200 group-hover:opacity-100" />
+        <button
+          type="button"
+          className="absolute right-2 bottom-2 flex h-5 w-5 items-center justify-center rounded-full bg-white/15 text-white opacity-0 backdrop-blur-md transition-all duration-200 group-hover:opacity-100 hover:scale-110 hover:bg-white/25"
+          onClick={(e) => {
+            e.stopPropagation()
+            onPreview()
+          }}
+        >
+          <svg
+            className="h-3 w-3"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <polyline points="15 3 21 3 21 9" />
+            <polyline points="9 21 3 21 3 15" />
+            <line x1="21" x2="14" y1="3" y2="10" />
+            <line x1="3" x2="10" y1="21" y2="14" />
+          </svg>
+        </button>
+
+        {/* 选中态 — 左下角圆点 + 微妙高亮 */}
+        <div
+          className={`absolute top-2.5 left-2.5 flex h-[22px] w-[22px] items-center justify-center rounded-full transition-all duration-200 ${
+            file.selected
+              ? "scale-100 bg-white text-primary shadow-sm"
+              : "scale-90 bg-black/10 text-white/80 opacity-0 backdrop-blur-sm group-hover:scale-100 group-hover:opacity-100 dark:bg-white/10"
+          }`}
+          onClick={(e) => {
+            e.stopPropagation()
+            onToggle()
+          }}
+        >
+          <svg
+            className="h-3 w-3"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="3"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            {file.selected ? (
+              <polyline points="20 6 9 17 4 12" />
+            ) : (
+              <>
+                <line x1="12" x2="12" y1="5" y2="19" />
+                <line x1="5" x2="19" y1="12" y2="12" />
+              </>
+            )}
+          </svg>
+        </div>
+      </div>
+
+      {/* 底部信息 */}
+      <div className="flex items-center gap-1.5 border-t border-border/40 px-2.5 py-1.5">
+        <span
+          className={`inline-flex shrink-0 items-center rounded px-1 py-px text-[9px] font-semibold tracking-wide uppercase ${
+            file.type === "video"
+              ? "bg-blue-500/8 text-blue-500 dark:text-blue-400"
+              : "bg-emerald-500/8 text-emerald-600 dark:text-emerald-400"
+          }`}
+        >
+          {file.type === "video"
+            ? "MP4"
+            : file.name.split(".").pop()?.toUpperCase() || "IMG"}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground/80">
+          {file.name}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * 从视频 URL 抽取一帧作为缩略图。
+ *
+ * 隐藏一个 <video> 元素，加载元数据后 seek 到 0.5s，用 canvas 截取画面。
+ * Shopify CDN 视频支持 Range 请求，浏览器只下载 seek 附近的几 KB 数据，
+ * 不会把整个视频拉下来。
+ */
+function VideoThumbnail({ src, name }: { src: string; name: string }) {
+  const [thumb, setThumb] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+  const videoRef = useRef<HTMLVideoElement>(null)
+
+  const capture = useCallback(() => {
+    const video = videoRef.current
+    if (!video || video.readyState < 2) return
+    try {
+      const canvas = document.createElement("canvas")
+      canvas.width = video.videoWidth || 400
+      canvas.height = video.videoHeight || 300
+      const ctx = canvas.getContext("2d")
+      if (!ctx) return
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+      setThumb(canvas.toDataURL("image/jpeg", 0.6))
+    } catch {
+      setFailed(true)
+    }
+  }, [])
+
+  if (failed || !src) {
+    return (
+      <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-gradient-to-br from-blue-500/[0.04] to-violet-500/[0.04]">
+        <IconVideo className="h-10 w-10 text-blue-400/25" />
+        <span className="text-[10px] text-muted-foreground/40">video</span>
+      </div>
+    )
+  }
+
+  if (thumb) {
+    return (
+      <img
+        src={thumb}
+        alt={name}
+        className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.03]"
+      />
+    )
+  }
+
+  return (
+    <>
+      {/* 加载中占位 */}
+      <div className="absolute inset-0 flex items-center justify-center">
+        <span className="h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
+      </div>
+      <video
+        ref={videoRef}
+        src={src}
+        preload="metadata"
+        muted
+        playsInline
+        crossOrigin="anonymous"
+        onLoadedData={() => {
+          const v = videoRef.current
+          if (v) {
+            v.currentTime = Math.min(0.5, v.duration || 0.5)
+          }
+        }}
+        onSeeked={capture}
+        onError={() => setFailed(true)}
+        className="pointer-events-none absolute h-0 w-0 opacity-0"
+      />
+    </>
+  )
+}
+
 function IconDownload({ className = "w-4 h-4" }: { className?: string }) {
   return (
     <svg
@@ -415,7 +612,6 @@ export default function Page() {
     setError("")
     try {
       const parsed = parseMediaUrls(jsonInput)
-      console.log(parsed,"parsed");
       
       if (parsed.length === 0) {
         setError("未找到素材文件（视频或图片）")
@@ -430,9 +626,6 @@ export default function Page() {
 
       // 找出需要通过 API 解析的 shopify:// URL
       const shopifyUrls = direct.filter((f) => !f.resolvedUrl).map((f) => f.url)
-
-      console.log(shopifyUrls,"shopifyUrls");
-      
 
       if (shopifyUrls.length > 0) {
         if (!storeDomain || !accessToken) {
@@ -560,13 +753,25 @@ export default function Page() {
     setVideos((prev) => prev.map((v) => ({ ...v, selected: false })))
   }, [])
 
+  const handleToggleType = useCallback(
+    (type: "video" | "image", select: boolean) => {
+      setVideos((prev) =>
+        prev.map((v) => (v.type === type ? { ...v, selected: select } : v))
+      )
+    },
+    []
+  )
+
   const selectedCount = videos.filter((v) => v.selected).length
   const videoCount = videos.filter((v) => v.type === "video").length
   const imageCount = videos.filter((v) => v.type === "image").length
 
-  /** 视频排前面，图片排后面 */
-  const sortedVideos = useMemo(
-    () => [...videos].sort((a) => (a.type === "video" ? -1 : 1)),
+  const videoList = useMemo(
+    () => videos.filter((v) => v.type === "video"),
+    [videos]
+  )
+  const imageList = useMemo(
+    () => videos.filter((v) => v.type === "image"),
     [videos]
   )
 
@@ -934,166 +1139,116 @@ export default function Page() {
                     </div>
                   </div>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 text-xs text-muted-foreground"
-                  onClick={
-                    selectedCount === videos.length
-                      ? handleDeselectAll
-                      : handleSelectAll
-                  }
-                >
-                  {selectedCount === videos.length
-                    ? "取消全选"
-                    : `全选 (${videos.length})`}
-                </Button>
-              </div>
-
-              {/* 文件宫格 */}
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-                {sortedVideos.map((video) => (
-                  <div
-                    key={video.url}
-                    className="group relative cursor-pointer overflow-hidden rounded-xl border border-border/60 bg-card transition-all duration-200 hover:border-border hover:shadow-lg hover:shadow-black/5"
-                    onClick={() => handleToggle(video.url)}
+                <div className="flex items-center gap-1.5">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs text-muted-foreground"
+                    onClick={
+                      selectedCount === videos.length
+                        ? handleDeselectAll
+                        : handleSelectAll
+                    }
                   >
-                    {/* 缩略图 */}
-                    <div className="relative aspect-square overflow-hidden bg-muted/30">
-                      {video.type === "image" ? (
-                        video.resolvedUrl ? (
-                          <img
-                            src={
-                              video.resolvedUrl.includes("cdn.shopify.com")
-                                ? video.resolvedUrl +
-                                  (video.resolvedUrl.includes("?")
-                                    ? "&"
-                                    : "?") +
-                                  "width=400"
-                                : video.resolvedUrl
-                            }
-                            alt={video.name}
-                            className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.03]"
-                            loading="lazy"
-                          />
-                        ) : (
-                          <div className="flex h-full w-full items-center justify-center">
-                            <span className="h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
-                          </div>
-                        )
-                      ) : (
-                        <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-gradient-to-br from-blue-500/[0.04] to-violet-500/[0.04]">
-                          <IconVideo className="h-10 w-10 text-blue-400/25" />
-                          <span className="text-[10px] text-muted-foreground/40">
-                            video
-                          </span>
-                        </div>
-                      )}
-
-                      {/* hover 底部渐变遮罩 + 预览按钮 */}
-                      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/40 to-transparent opacity-0 transition-opacity duration-200 group-hover:opacity-100" />
-                      <button
-                        type="button"
-                        className="absolute right-2 bottom-2 flex h-5 w-5 items-center justify-center rounded-full bg-white/15 text-white opacity-0 backdrop-blur-md transition-all duration-200 group-hover:opacity-100 hover:scale-110 hover:bg-white/25"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handlePreview(video)
-                        }}
-                      >
-                        <svg
-                          className="h-3 w-3"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2.5"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          <polyline points="15 3 21 3 21 9" />
-                          <polyline points="9 21 3 21 3 15" />
-                          <line x1="21" x2="14" y1="3" y2="10" />
-                          <line x1="3" x2="10" y1="21" y2="14" />
-                        </svg>
-                      </button>
-
-                      {/* 选中态 — 左下角圆点 + 微妙高亮 */}
-                      <div
-                        className={`absolute top-2.5 left-2.5 flex h-[22px] w-[22px] items-center justify-center rounded-full transition-all duration-200 ${
-                          video.selected
-                            ? "scale-100 bg-white text-primary shadow-sm"
-                            : "scale-90 bg-black/10 text-white/80 opacity-0 backdrop-blur-sm group-hover:scale-100 group-hover:opacity-100 dark:bg-white/10"
-                        }`}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleToggle(video.url)
-                        }}
-                      >
-                        <svg
-                          className="h-3 w-3"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="3"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          {video.selected ? (
-                            <polyline points="20 6 9 17 4 12" />
-                          ) : (
-                            <>
-                              <line x1="12" x2="12" y1="5" y2="19" />
-                              <line x1="5" x2="19" y1="12" y2="12" />
-                            </>
-                          )}
-                        </svg>
-                      </div>
-                    </div>
-
-                    {/* 底部信息 */}
-                    <div className="flex items-center gap-1.5 border-t border-border/40 px-2.5 py-1.5">
-                      <span
-                        className={`inline-flex shrink-0 items-center rounded px-1 py-px text-[9px] font-semibold tracking-wide uppercase ${
-                          video.type === "video"
-                            ? "bg-blue-500/8 text-blue-500 dark:text-blue-400"
-                            : "bg-emerald-500/8 text-emerald-600 dark:text-emerald-400"
-                        }`}
-                      >
-                        {video.type === "video"
-                          ? "MP4"
-                          : video.name.split(".").pop()?.toUpperCase() || "IMG"}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground/80">
-                        {video.name}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* 下载按钮 */}
-              <Button
-                onClick={handleDownload}
-                disabled={selectedCount === 0 || downloading}
-                className="w-full gap-2 rounded-xl"
-                size="lg"
-              >
-                {downloading ? (
-                  <>
-                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" />
-                    正在打包下载...
-                  </>
-                ) : (
-                  <>
-                    <IconDownload className="h-4 w-4" />
-                    下载选中文件
+                    {selectedCount === videos.length
+                      ? "取消全选"
+                      : `全选 (${videos.length})`}
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="h-7 gap-1.5 rounded-lg text-xs"
+                    onClick={handleDownload}
+                    disabled={selectedCount === 0 || downloading}
+                  >
+                    {downloading ? (
+                      <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" />
+                    ) : (
+                      <IconDownload className="h-3.5 w-3.5" />
+                    )}
+                    下载
                     {selectedCount > 0 && (
-                      <span className="ml-1 rounded-full bg-primary-foreground/20 px-2 py-0.5 text-xs font-medium">
+                      <span className="rounded-full bg-primary-foreground/20 px-1.5 py-px text-[10px] font-medium">
                         {selectedCount}
                       </span>
                     )}
-                  </>
-                )}
-              </Button>
+                  </Button>
+                </div>
+              </div>
+
+              {/* ── 视频 ── */}
+              {videoList.length > 0 && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <IconVideo className="h-4 w-4 text-blue-500" />
+                      <span className="text-sm font-medium">
+                        视频 · {videoList.length}
+                      </span>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 text-[11px] text-muted-foreground"
+                      onClick={() => {
+                        const allSelected = videoList.every((v) => v.selected)
+                        handleToggleType("video", !allSelected)
+                      }}
+                    >
+                      {videoList.every((v) => v.selected)
+                        ? "取消全选"
+                        : "全选"}
+                    </Button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+                    {videoList.map((file) => (
+                      <MediaCard
+                        key={file.url}
+                        file={file}
+                        onToggle={() => handleToggle(file.url)}
+                        onPreview={() => handlePreview(file)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* ── 图片 ── */}
+              {imageList.length > 0 && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <IconImage className="h-4 w-4 text-emerald-500" />
+                      <span className="text-sm font-medium">
+                        图片 · {imageList.length}
+                      </span>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 text-[11px] text-muted-foreground"
+                      onClick={() => {
+                        const allSelected = imageList.every((v) => v.selected)
+                        handleToggleType("image", !allSelected)
+                      }}
+                    >
+                      {imageList.every((v) => v.selected)
+                        ? "取消全选"
+                        : "全选"}
+                    </Button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+                    {imageList.map((file) => (
+                      <MediaCard
+                        key={file.url}
+                        file={file}
+                        onToggle={() => handleToggle(file.url)}
+                        onPreview={() => handlePreview(file)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+
             </CardContent>
           </Card>
         )}
