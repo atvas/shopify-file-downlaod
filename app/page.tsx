@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useEffect, useMemo } from "react"
+import { useState, useCallback, useEffect, useMemo, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -32,6 +32,11 @@ import {
   IconChevronDown,
 } from "@/components/icons"
 import { MediaCard } from "@/components/media-card"
+import {
+  Progress,
+  ProgressLabel,
+  ProgressValue,
+} from "@/components/ui/progress"
 import { TemplateDialog } from "@/components/template-dialog"
 import { PreviewDialog } from "@/components/preview-dialog"
 
@@ -58,6 +63,7 @@ export default function Page() {
     current: number
     total: number
   } | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
   const [mounted, setMounted] = useState(false)
   const [configExpanded, setConfigExpanded] = useState(true)
 
@@ -349,6 +355,10 @@ export default function Page() {
       return
     }
 
+    const ac = new AbortController()
+    abortRef.current = ac
+    const { signal } = ac
+
     /** 服务端回退：走 /api/shopify-videos（当客户端 CORS 被拦截时） */
     const serverFallback = async () => {
       const response = await fetch("/api/shopify-videos", {
@@ -362,6 +372,7 @@ export default function Page() {
             name: v.name,
           })),
         }),
+        signal,
       })
       if (!response.ok) {
         const data = await response.json()
@@ -392,11 +403,12 @@ export default function Page() {
         const file = selected[0]
         const url = file.resolvedUrl || file.url
         try {
-          const res = await fetch(url)
+          const res = await fetch(url, { signal })
           if (!res.ok) throw new Error(`${res.status}`)
           const blob = await res.blob()
           triggerSave(blob, file.name)
-        } catch {
+        } catch (err) {
+          if (err instanceof DOMException && err.name === "AbortError") return
           // CORS 或网络失败，走服务端回退
           await serverFallback()
         }
@@ -408,6 +420,7 @@ export default function Page() {
         let clientFailed = false
 
         for (let i = 0; i < selected.length; i++) {
+          if (signal.aborted) return
           const file = selected[i]
           setDownloadProgress({
             current: i + 1,
@@ -415,7 +428,7 @@ export default function Page() {
           })
           const url = file.resolvedUrl || file.url
           try {
-            const res = await fetch(url)
+            const res = await fetch(url, { signal })
             if (!res.ok) {
               errors.push(`${file.name}: HTTP ${res.status}`)
               continue
@@ -423,6 +436,11 @@ export default function Page() {
             const buf = await res.arrayBuffer()
             zip.file(file.name, buf)
           } catch (fetchErr) {
+            if (
+              fetchErr instanceof DOMException &&
+              fetchErr.name === "AbortError"
+            )
+              return
             // 第一个文件就 CORS 失败，直接走服务端回退
             if (i === 0) {
               clientFailed = true
@@ -446,12 +464,18 @@ export default function Page() {
         triggerSave(zipBlob, `shopify-assets-${Date.now()}.zip`)
       }
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return
       setError(err instanceof Error ? err.message : "下载失败")
     } finally {
+      abortRef.current = null
       setDownloading(false)
       setDownloadProgress(null)
     }
   }, [videos, storeDomain, accessToken])
+
+  const handleCancelDownload = useCallback(() => {
+    abortRef.current?.abort()
+  }, [])
 
   // ── 预览 ─────────────────────────────────────────────────────────────
   // 视频和图片都直接用 CDN 地址。Shopify 的 CDN 是公开读的（图片本来就是这么
@@ -817,17 +841,43 @@ export default function Page() {
                     ) : (
                       <IconDownload className="h-3.5 w-3.5" />
                     )}
-                    {downloadProgress
-                      ? `下载中 (${downloadProgress.current}/${downloadProgress.total})`
-                      : "下载"}
-                    {selectedCount > 0 && (
+                    {downloading ? "下载中" : "下载"}
+                    {!downloading && selectedCount > 0 && (
                       <span className="rounded-full bg-primary-foreground/20 px-1.5 py-px text-[10px] font-medium">
                         {selectedCount}
                       </span>
                     )}
                   </Button>
+                  {downloading && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 gap-1 rounded-lg text-xs"
+                      onClick={handleCancelDownload}
+                    >
+                      取消
+                    </Button>
+                  )}
                 </div>
               </div>
+
+              {/* ── 下载进度条 ── */}
+              {downloadProgress && (
+                <Progress
+                  value={
+                    (downloadProgress.current / downloadProgress.total) * 100
+                  }
+                  className="gap-2"
+                >
+                  <ProgressLabel className="text-xs">
+                    正在下载
+                  </ProgressLabel>
+                  <ProgressValue className="text-xs" />
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    ({downloadProgress.current}/{downloadProgress.total})
+                  </span>
+                </Progress>
+              )}
 
               {/* ── 视频 ── */}
               {videoList.length > 0 && (
