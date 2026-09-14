@@ -502,7 +502,9 @@ export default function Page() {
 
   const closePreview = useCallback(() => {
     setPreviewFile(null)
-    setPreviewUrl(null)
+    // previewUrl 保留不立即清空——弹窗关闭动画期间媒体 src 需要还在，
+    // 否则素材会先消失、弹窗再关。真正的清空由 PreviewDialog 的
+    // onOpenChange(false) 回调触发。
   }, [])
 
   /** 从主题获取 —— 获取到内容后自动填入并解析 */

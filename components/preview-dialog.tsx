@@ -1,5 +1,6 @@
 "use client"
 
+import { useState, useRef, useCallback } from "react"
 import type { MediaFile } from "@/lib/types"
 import { IconVideo, IconImage } from "@/components/icons"
 import {
@@ -17,8 +18,31 @@ export function PreviewDialog({
   previewUrl: string | null
   onClose: () => void
 }) {
+  const [loaded, setLoaded] = useState(false)
+  const [displayUrl, setDisplayUrl] = useState<string | null>(null)
+  const displayUrlRef = useRef<string | null>(null)
+
+  // 渲染阶段同步：打开新预览时立即更新 displayUrl，关闭时保持不变
+  if (previewUrl && previewUrl !== displayUrlRef.current) {
+    displayUrlRef.current = previewUrl
+    setLoaded(false)
+    setDisplayUrl(previewUrl)
+  }
+
+  // 只通知父组件，不碰 displayUrl——动画期间媒体 src 保持有效
+  const handleOpenChange = useCallback(
+    (open: boolean) => {
+      if (!open) onClose()
+    },
+    [onClose],
+  )
+
+  const handleMediaReady = useCallback(() => {
+    if (displayUrlRef.current === displayUrl) setLoaded(true)
+  }, [displayUrl])
+
   return (
-    <Dialog open={!!file} onOpenChange={(open) => !open && onClose()}>
+    <Dialog open={!!file} onOpenChange={handleOpenChange}>
       <DialogContent
         className="gap-0 overflow-hidden border-0 bg-card p-0 shadow-2xl sm:max-w-5xl"
         showCloseButton={false}
@@ -64,20 +88,35 @@ export function PreviewDialog({
         </div>
 
         {/* 媒体内容 */}
-        <div className="flex items-center justify-center bg-black/[0.03] dark:bg-white/[0.03]">
-          {previewUrl ? (
+        <div className="relative flex min-h-[200px] items-center justify-center bg-black/[0.03] dark:bg-white/[0.03]">
+          {/* 加载骨架 */}
+          {!loaded && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+              <div className="h-10 w-10 animate-pulse rounded-lg bg-muted" />
+              <div className="flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/40 [animation-delay:-0.3s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/40 [animation-delay:-0.15s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/40" />
+              </div>
+            </div>
+          )}
+
+          {/* 媒体元素始终用 displayUrl，关闭动画期间 src 保持有效 */}
+          {displayUrl ? (
             file?.type === "video" ? (
               <video
-                src={previewUrl}
+                src={displayUrl}
                 controls
                 autoPlay
-                className="max-h-[80vh] w-full object-contain"
+                onCanPlay={handleMediaReady}
+                className={`max-h-[80vh] w-full object-contain transition-opacity duration-200 ${loaded ? "opacity-100" : "opacity-0"}`}
               />
             ) : (
               <img
-                src={previewUrl}
+                src={displayUrl}
                 alt={file?.name}
-                className="max-h-[80vh] w-full object-contain"
+                onLoad={handleMediaReady}
+                className={`max-h-[80vh] w-full object-contain transition-opacity duration-200 ${loaded ? "opacity-100" : "opacity-0"}`}
               />
             )
           ) : (
