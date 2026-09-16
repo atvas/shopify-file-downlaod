@@ -78,7 +78,7 @@ npm run build && npm start
 需要以下 Admin API Access Token 权限（scopes）：
 
 - `read_themes` — 读取主题列表和模板内容
-- `read_files` / `read_content` — 通过 GraphQL 解析文件 URL
+- `read_files`  — 通过 GraphQL 解析文件 URL
 
 ## 开发命令
 
