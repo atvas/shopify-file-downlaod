@@ -311,7 +311,7 @@ export default function Page() {
             const decoder = new TextDecoder()
             let buffer = ""
 
-            for (;;) {
+            for (; ;) {
               const { done, value } = await reader.read()
               if (done) break
 
@@ -552,8 +552,8 @@ export default function Page() {
     // 图片加 width 参数加速；视频不能加，会破坏 range 请求
     const url =
       file.type === "image" &&
-      src.includes("cdn.shopify.com") &&
-      !src.includes("width=")
+        src.includes("cdn.shopify.com") &&
+        !src.includes("width=")
         ? src + (src.includes("?") ? "&" : "?") + "width=1200"
         : src
 
@@ -676,6 +676,8 @@ export default function Page() {
       setSelectedKey(key)
       if (!selectedThemeId) return
       setVideos([])
+      setTemplateJson(null)
+      setSections([])
       setResolving(true)
       setError("")
       try {
@@ -774,7 +776,7 @@ export default function Page() {
               <span
                 className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold bg-foreground text-background`}
               >
-               1
+                1
               </span>
               <div>
                 <CardTitle className="text-sm">API 配置</CardTitle>
@@ -786,9 +788,8 @@ export default function Page() {
               </div>
             </div>
             <IconChevronDown
-              className={`h-4 w-4 text-muted-foreground transition-transform ${
-                configExpanded ? "rotate-180" : ""
-              }`}
+              className={`h-4 w-4 text-muted-foreground transition-transform ${configExpanded ? "rotate-180" : ""
+                }`}
             />
           </button>
 
@@ -884,7 +885,7 @@ export default function Page() {
           )}
         </Card>
 
-       
+
 
         {/* ── Step 2: 选择主题 & 模板 ─────────────────────────────────── */}
         <Card className="border-border/50 shadow-sm">
@@ -1012,26 +1013,8 @@ export default function Page() {
           </CardContent>
         </Card>
 
-        {/* ── 错误提示 ───────────────────────────────────────────────── */}
-        {error && (
-          <div className="flex items-start gap-3 rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 backdrop-blur-sm">
-            <svg
-              className="mt-0.5 h-4 w-4 shrink-0 text-destructive"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" x2="12" y1="8" y2="12" />
-              <line x1="12" x2="12.01" y1="16" y2="16" />
-            </svg>
-            <p className="whitespace-pre-wrap text-sm text-destructive">
-              {error}
-            </p>
-          </div>
-        )}
-         {/* ── 模板代码信息（可折叠） ── */}
+
+        {/* ── 模板代码信息（可折叠） ── */}
         {(templateJson || sections.length > 0) && (
           <div className="space-y-3 rounded-xl border border-border/40 bg-muted/30 px-4 py-3">
             {/* 模板 JSON */}
@@ -1061,9 +1044,8 @@ export default function Page() {
                     </span>
                   </div>
                   <IconChevronDown
-                    className={`h-3.5 w-3.5 text-muted-foreground/60 transition-transform ${
-                      templateJsonExpanded ? "rotate-180" : ""
-                    }`}
+                    className={`h-3.5 w-3.5 text-muted-foreground/60 transition-transform ${templateJsonExpanded ? "rotate-180" : ""
+                      }`}
                   />
                 </button>
                 {templateJsonExpanded && (
@@ -1166,9 +1148,8 @@ export default function Page() {
                     </span>
                   </div>
                   <IconChevronDown
-                    className={`h-3.5 w-3.5 text-muted-foreground/60 transition-transform ${
-                      sectionsExpanded ? "rotate-180" : ""
-                    }`}
+                    className={`h-3.5 w-3.5 text-muted-foreground/60 transition-transform ${sectionsExpanded ? "rotate-180" : ""
+                      }`}
                   />
                 </button>
                 {sectionsExpanded && (
@@ -1204,6 +1185,27 @@ export default function Page() {
           </div>
         )}
 
+
+        {/* ── 错误提示 ───────────────────────────────────────────────── */}
+        {error && (
+          <div className="flex items-start gap-3 rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 backdrop-blur-sm">
+            <svg
+              className="mt-0.5 h-4 w-4 shrink-0 text-destructive"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" x2="12" y1="8" y2="12" />
+              <line x1="12" x2="12.01" y1="16" y2="16" />
+            </svg>
+            <p className="whitespace-pre-wrap text-sm text-destructive">
+              {error}
+            </p>
+          </div>
+        )}
+
         {/* ── 素材列表 ───────────────────────────────────────────────── */}
         {(videos.length > 0 || resolving) && (
           <Card className="border-border/50 shadow-sm">
@@ -1229,176 +1231,176 @@ export default function Page() {
                   </div>
                 </div>
               ) : (
-              <>
-              {/* ── 顶栏：文件计数 + 操作按钮 ── */}
-              <div className="flex flex-wrap  items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-xs font-bold text-background">
-                    3
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium">
-                      {videos.length} 个文件
-                    </span>
-                    <div className="flex gap-1.5">
-                      {videoCount > 0 && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/8 px-2 py-0.5 text-[11px] font-medium text-blue-500 dark:text-blue-400">
-                          <IconVideo className="h-3 w-3" />
-                          {videoCount}
+                <>
+                  {/* ── 顶栏：文件计数 + 操作按钮 ── */}
+                  <div className="flex flex-wrap  items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-xs font-bold text-background">
+                        3
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium">
+                          {videos.length} 个文件
                         </span>
-                      )}
-                      {imageCount > 0 && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/8 px-2 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
-                          <IconImage className="h-3 w-3" />
-                          {imageCount}
-                        </span>
+                        <div className="flex gap-1.5">
+                          {videoCount > 0 && (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/8 px-2 py-0.5 text-[11px] font-medium text-blue-500 dark:text-blue-400">
+                              <IconVideo className="h-3 w-3" />
+                              {videoCount}
+                            </span>
+                          )}
+                          {imageCount > 0 && (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/8 px-2 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                              <IconImage className="h-3 w-3" />
+                              {imageCount}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 text-xs text-muted-foreground"
+                        onClick={
+                          selectedCount === videos.length
+                            ? handleDeselectAll
+                            : handleSelectAll
+                        }
+                      >
+                        {selectedCount === videos.length
+                          ? "取消全选"
+                          : `全选 (${videos.length})`}
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="h-7 gap-1.5 rounded-lg text-xs"
+                        onClick={handleDownload}
+                        disabled={selectedCount === 0 || downloading}
+                      >
+                        {downloading ? (
+                          <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" />
+                        ) : (
+                          <IconDownload className="h-3.5 w-3.5" />
+                        )}
+                        {downloading ? "下载中" : "下载"}
+                        {!downloading && selectedCount > 0 && (
+                          <span className="rounded-full bg-primary-foreground/20 px-1.5 py-px text-[10px] font-medium">
+                            {selectedCount}
+                          </span>
+                        )}
+                      </Button>
+                      {downloading && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 gap-1 rounded-lg text-xs"
+                          onClick={handleCancelDownload}
+                        >
+                          取消
+                        </Button>
                       )}
                     </div>
                   </div>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 text-xs text-muted-foreground"
-                    onClick={
-                      selectedCount === videos.length
-                        ? handleDeselectAll
-                        : handleSelectAll
-                    }
-                  >
-                    {selectedCount === videos.length
-                      ? "取消全选"
-                      : `全选 (${videos.length})`}
-                  </Button>
-                  <Button
-                    size="sm"
-                    className="h-7 gap-1.5 rounded-lg text-xs"
-                    onClick={handleDownload}
-                    disabled={selectedCount === 0 || downloading}
-                  >
-                    {downloading ? (
-                      <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" />
-                    ) : (
-                      <IconDownload className="h-3.5 w-3.5" />
-                    )}
-                    {downloading ? "下载中" : "下载"}
-                    {!downloading && selectedCount > 0 && (
-                      <span className="rounded-full bg-primary-foreground/20 px-1.5 py-px text-[10px] font-medium">
-                        {selectedCount}
-                      </span>
-                    )}
-                  </Button>
-                  {downloading && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-7 gap-1 rounded-lg text-xs"
-                      onClick={handleCancelDownload}
+
+                  {/* ── 下载进度条 ── */}
+                  {downloadProgress && (
+                    <Progress
+                      value={
+                        (downloadProgress.current / downloadProgress.total) * 100
+                      }
+                      className="gap-2"
                     >
-                      取消
-                    </Button>
+                      <ProgressLabel className="text-xs">
+                        正在下载
+                      </ProgressLabel>
+                      <ProgressValue className="text-xs" />
+                      <span className="text-xs text-muted-foreground tabular-nums">
+                        ({downloadProgress.current}/{downloadProgress.total})
+                      </span>
+                    </Progress>
                   )}
-                </div>
-              </div>
 
-              {/* ── 下载进度条 ── */}
-              {downloadProgress && (
-                <Progress
-                  value={
-                    (downloadProgress.current / downloadProgress.total) * 100
-                  }
-                  className="gap-2"
-                >
-                  <ProgressLabel className="text-xs">
-                    正在下载
-                  </ProgressLabel>
-                  <ProgressValue className="text-xs" />
-                  <span className="text-xs text-muted-foreground tabular-nums">
-                    ({downloadProgress.current}/{downloadProgress.total})
-                  </span>
-                </Progress>
-              )}
-
-              {/* ── 素材文件 ── */}
-              <div className="space-y-5">
-                  {videoList.length > 0 && (
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <IconVideo className="h-4 w-4 text-blue-500" />
-                          <span className="text-sm font-medium">
-                            视频 · {videoList.length}
-                          </span>
+                  {/* ── 素材文件 ── */}
+                  <div className="space-y-5">
+                    {videoList.length > 0 && (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <IconVideo className="h-4 w-4 text-blue-500" />
+                            <span className="text-sm font-medium">
+                              视频 · {videoList.length}
+                            </span>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 text-[11px] text-muted-foreground"
+                            onClick={() => {
+                              const allSelected = videoList.every(
+                                (v) => v.selected,
+                              )
+                              handleToggleType("video", !allSelected)
+                            }}
+                          >
+                            {videoList.every((v) => v.selected)
+                              ? "取消全选"
+                              : "全选"}
+                          </Button>
                         </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 text-[11px] text-muted-foreground"
-                          onClick={() => {
-                            const allSelected = videoList.every(
-                              (v) => v.selected,
-                            )
-                            handleToggleType("video", !allSelected)
-                          }}
-                        >
-                          {videoList.every((v) => v.selected)
-                            ? "取消全选"
-                            : "全选"}
-                        </Button>
-                      </div>
-                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
-                        {videoList.map((file) => (
-                          <MediaCard
-                            key={file.url}
-                            file={file}
-                            onToggle={() => handleToggle(file.url)}
-                            onPreview={() => handlePreview(file)}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {imageList.length > 0 && (
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <IconImage className="h-4 w-4 text-emerald-500" />
-                          <span className="text-sm font-medium">
-                            图片 · {imageList.length}
-                          </span>
+                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+                          {videoList.map((file) => (
+                            <MediaCard
+                              key={file.url}
+                              file={file}
+                              onToggle={() => handleToggle(file.url)}
+                              onPreview={() => handlePreview(file)}
+                            />
+                          ))}
                         </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 text-[11px] text-muted-foreground"
-                          onClick={() => {
-                            const allSelected = imageList.every(
-                              (v) => v.selected,
-                            )
-                            handleToggleType("image", !allSelected)
-                          }}
-                        >
-                          {imageList.every((v) => v.selected)
-                            ? "取消全选"
-                            : "全选"}
-                        </Button>
                       </div>
-                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
-                        {imageList.map((file) => (
-                          <MediaCard
-                            key={file.url}
-                            file={file}
-                            onToggle={() => handleToggle(file.url)}
-                            onPreview={() => handlePreview(file)}
-                          />
-                        ))}
+                    )}
+
+                    {imageList.length > 0 && (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <IconImage className="h-4 w-4 text-emerald-500" />
+                            <span className="text-sm font-medium">
+                              图片 · {imageList.length}
+                            </span>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 text-[11px] text-muted-foreground"
+                            onClick={() => {
+                              const allSelected = imageList.every(
+                                (v) => v.selected,
+                              )
+                              handleToggleType("image", !allSelected)
+                            }}
+                          >
+                            {imageList.every((v) => v.selected)
+                              ? "取消全选"
+                              : "全选"}
+                          </Button>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+                          {imageList.map((file) => (
+                            <MediaCard
+                              key={file.url}
+                              file={file}
+                              onToggle={() => handleToggle(file.url)}
+                              onPreview={() => handlePreview(file)}
+                            />
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  )}
-                </div>
-              </>
+                    )}
+                  </div>
+                </>
               )}
             </CardContent>
           </Card>
