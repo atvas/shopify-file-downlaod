@@ -21,7 +21,7 @@ import {
   getSavedConfigsFromStorage,
   getLastUsedConfigFromStorage,
 } from "@/lib/types"
-import { parseMediaUrls } from "@/lib/parse"
+import { parseMediaUrls, parseSectionRefs } from "@/lib/parse"
 import JSZip from "jszip"
 import {
   IconVideo,
@@ -46,6 +46,7 @@ import {
   ComboboxEmpty,
 } from "@/components/ui/combobox"
 import { PreviewDialog } from "@/components/preview-dialog"
+import { CodeDialog } from "@/components/code-dialog"
 
 // ── 主页面 ──────────────────────────────────────────────────────────────
 
@@ -209,12 +210,24 @@ export default function Page() {
   }, [selectedConfigId, savedConfigs, saveConfigs])
 
   const [resolving, setResolving] = useState(false)
+  const [sections, setSections] = useState<string[]>([])
+  const [sectionsExpanded, setSectionsExpanded] = useState(false)
+
+  // section 代码查看
+  const [viewingSection, setViewingSection] = useState<string | null>(null)
+  const [sectionCode, setSectionCode] = useState<string | null>(null)
+
+  // 模板原始 JSON
+  const [templateJson, setTemplateJson] = useState<string | null>(null)
+  const [templateJsonExpanded, setTemplateJsonExpanded] = useState(false)
+  const [jsonCopied, setJsonCopied] = useState(false)
 
   const handleParse = useCallback(
     async (content: string) => {
       setError("")
       try {
         const parsed = parseMediaUrls(content)
+        setSections(parseSectionRefs(content))
 
         if (parsed.length === 0) {
           setVideos([])
@@ -555,6 +568,39 @@ export default function Page() {
     // onOpenChange(false) 回调触发。
   }, [])
 
+  // ── Section 代码查看 ───────────────────────────────────────────────
+  const handleViewSection = useCallback(
+    async (key: string) => {
+      if (!selectedThemeId) return
+      setViewingSection(key)
+      setSectionCode(null)
+      try {
+        const res = await fetch("/api/shopify-templates", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            storeDomain,
+            accessToken,
+            action: "get-template",
+            themeId: selectedThemeId,
+            key,
+          }),
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || "获取 Section 内容失败")
+        setSectionCode(data.content ?? "")
+      } catch (err) {
+        setSectionCode(`// 加载失败: ${err instanceof Error ? err.message : "未知错误"}`)
+      }
+    },
+    [selectedThemeId, storeDomain, accessToken],
+  )
+
+  const closeCodeDialog = useCallback(() => {
+    setViewingSection(null)
+    // sectionCode 保留，关闭动画期间内容仍然可见
+  }, [])
+
   // ── 主题 / 模板获取 ─────────────────────────────────────────────────
 
   const fetchTemplates = useCallback(
@@ -647,6 +693,7 @@ export default function Page() {
         const data = await res.json()
         if (!res.ok) throw new Error(data.error || "获取模板内容失败")
         const content: string = data.content ?? ""
+        setTemplateJson(content)
         await handleParse(content)
       } catch (err) {
         setError(err instanceof Error ? err.message : "获取模板内容失败")
@@ -837,6 +884,8 @@ export default function Page() {
           )}
         </Card>
 
+       
+
         {/* ── Step 2: 选择主题 & 模板 ─────────────────────────────────── */}
         <Card className="border-border/50 shadow-sm">
           <CardContent className="space-y-4 px-6 py-5">
@@ -982,6 +1031,178 @@ export default function Page() {
             </p>
           </div>
         )}
+         {/* ── 模板代码信息（可折叠） ── */}
+        {(templateJson || sections.length > 0) && (
+          <div className="space-y-3 rounded-xl border border-border/40 bg-muted/30 px-4 py-3">
+            {/* 模板 JSON */}
+            {templateJson && (
+              <div className="space-y-2">
+                <button
+                  onClick={() => setTemplateJsonExpanded((p) => !p)}
+                  className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-background/50"
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="flex h-5 w-5 items-center justify-center">
+                      <svg
+                        className="h-4 w-4 text-foreground/40"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+                        <polyline points="14 2 14 8 20 8" />
+                      </svg>
+                    </div>
+                    <span className="text-sm text-muted-foreground">
+                      模板 JSON
+                    </span>
+                  </div>
+                  <IconChevronDown
+                    className={`h-3.5 w-3.5 text-muted-foreground/60 transition-transform ${
+                      templateJsonExpanded ? "rotate-180" : ""
+                    }`}
+                  />
+                </button>
+                {templateJsonExpanded && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between pl-2">
+                      <span className="text-xs text-muted-foreground/70">
+                        {selectedKey?.replace(/^templates\//, "")}
+                      </span>
+                      <div className="flex gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 gap-1 px-2 text-[11px] text-muted-foreground/70"
+                          onClick={() => {
+                            const blob = new Blob([templateJson], {
+                              type: "application/json",
+                            })
+                            const url = URL.createObjectURL(blob)
+                            const a = document.createElement("a")
+                            a.href = url
+                            a.download =
+                              selectedKey?.replace(
+                                /^templates\//,
+                                "",
+                              ) || "template.json"
+                            document.body.appendChild(a)
+                            a.click()
+                            URL.revokeObjectURL(url)
+                            document.body.removeChild(a)
+                          }}
+                        >
+                          下载
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 gap-1 px-2 text-[11px] text-muted-foreground/70"
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText(
+                                templateJson,
+                              )
+                              setJsonCopied(true)
+                              setTimeout(
+                                () => setJsonCopied(false),
+                                2000,
+                              )
+                            } catch {
+                              // ignore
+                            }
+                          }}
+                        >
+                          {jsonCopied ? "✓ 已复制" : "复制"}
+                        </Button>
+                      </div>
+                    </div>
+                    <pre className="max-h-72 overflow-auto rounded-lg bg-background/60 p-3 text-[12px] leading-relaxed">
+                      <code className="font-mono text-foreground/50">
+                        {templateJson}
+                      </code>
+                    </pre>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {templateJson && sections.length > 0 && (
+              <div className="mx-2 h-px bg-border/40" />
+            )}
+
+            {/* Section 列表 */}
+            {sections.length > 0 && (
+              <div className="space-y-2">
+                <button
+                  onClick={() => setSectionsExpanded((p) => !p)}
+                  className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-background/50"
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="flex h-5 w-5 items-center justify-center">
+                      <svg
+                        className="h-4 w-4 text-violet-500/60"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.75"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <rect x="3" y="3" width="7" height="7" rx="1" />
+                        <rect x="14" y="3" width="7" height="7" rx="1" />
+                        <rect x="3" y="14" width="7" height="7" rx="1" />
+                        <rect x="14" y="14" width="7" height="7" rx="1" />
+                      </svg>
+                    </div>
+                    <span className="text-sm text-muted-foreground">
+                      引用的 Section
+                    </span>
+                    <span className="rounded-full bg-violet-500/8 px-1.5 py-0.5 text-[11px] font-medium text-violet-500/70">
+                      {sections.length}
+                    </span>
+                  </div>
+                  <IconChevronDown
+                    className={`h-3.5 w-3.5 text-muted-foreground/60 transition-transform ${
+                      sectionsExpanded ? "rotate-180" : ""
+                    }`}
+                  />
+                </button>
+                {sectionsExpanded && (
+                  <div className="grid gap-1 pl-2">
+                    {sections.map((key) => (
+                      <button
+                        key={key}
+                        onClick={() => handleViewSection(key)}
+                        className="group flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors hover:bg-background/50"
+                      >
+                        <span className="text-muted-foreground/30 transition-colors group-hover:text-violet-500/60">
+                          <svg
+                            className="h-3 w-3"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <polyline points="9 18 15 12 9 6" />
+                          </svg>
+                        </span>
+                        <span className="truncate font-mono text-xs text-muted-foreground/70 transition-colors group-hover:text-foreground">
+                          {key}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ── 素材列表 ───────────────────────────────────────────────── */}
         {(videos.length > 0 || resolving) && (
@@ -1009,7 +1230,8 @@ export default function Page() {
                 </div>
               ) : (
               <>
-              <div className="flex flex-wrap items-center justify-between gap-3">
+              {/* ── 顶栏：文件计数 + 操作按钮 ── */}
+              <div className="flex flex-wrap  items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
                   <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-xs font-bold text-background">
                     3
@@ -1098,79 +1320,84 @@ export default function Page() {
                 </Progress>
               )}
 
-              {/* ── 视频 ── */}
-              {videoList.length > 0 && (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <IconVideo className="h-4 w-4 text-blue-500" />
-                      <span className="text-sm font-medium">
-                        视频 · {videoList.length}
-                      </span>
+              {/* ── 素材文件 ── */}
+              <div className="space-y-5">
+                  {videoList.length > 0 && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <IconVideo className="h-4 w-4 text-blue-500" />
+                          <span className="text-sm font-medium">
+                            视频 · {videoList.length}
+                          </span>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 text-[11px] text-muted-foreground"
+                          onClick={() => {
+                            const allSelected = videoList.every(
+                              (v) => v.selected,
+                            )
+                            handleToggleType("video", !allSelected)
+                          }}
+                        >
+                          {videoList.every((v) => v.selected)
+                            ? "取消全选"
+                            : "全选"}
+                        </Button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+                        {videoList.map((file) => (
+                          <MediaCard
+                            key={file.url}
+                            file={file}
+                            onToggle={() => handleToggle(file.url)}
+                            onPreview={() => handlePreview(file)}
+                          />
+                        ))}
+                      </div>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 text-[11px] text-muted-foreground"
-                      onClick={() => {
-                        const allSelected = videoList.every((v) => v.selected)
-                        handleToggleType("video", !allSelected)
-                      }}
-                    >
-                      {videoList.every((v) => v.selected)
-                        ? "取消全选"
-                        : "全选"}
-                    </Button>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-                    {videoList.map((file) => (
-                      <MediaCard
-                        key={file.url}
-                        file={file}
-                        onToggle={() => handleToggle(file.url)}
-                        onPreview={() => handlePreview(file)}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
+                  )}
 
-              {/* ── 图片 ── */}
-              {imageList.length > 0 && (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <IconImage className="h-4 w-4 text-emerald-500" />
-                      <span className="text-sm font-medium">
-                        图片 · {imageList.length}
-                      </span>
+                  {imageList.length > 0 && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <IconImage className="h-4 w-4 text-emerald-500" />
+                          <span className="text-sm font-medium">
+                            图片 · {imageList.length}
+                          </span>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 text-[11px] text-muted-foreground"
+                          onClick={() => {
+                            const allSelected = imageList.every(
+                              (v) => v.selected,
+                            )
+                            handleToggleType("image", !allSelected)
+                          }}
+                        >
+                          {imageList.every((v) => v.selected)
+                            ? "取消全选"
+                            : "全选"}
+                        </Button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+                        {imageList.map((file) => (
+                          <MediaCard
+                            key={file.url}
+                            file={file}
+                            onToggle={() => handleToggle(file.url)}
+                            onPreview={() => handlePreview(file)}
+                          />
+                        ))}
+                      </div>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 text-[11px] text-muted-foreground"
-                      onClick={() => {
-                        const allSelected = imageList.every((v) => v.selected)
-                        handleToggleType("image", !allSelected)
-                      }}
-                    >
-                      {imageList.every((v) => v.selected)
-                        ? "取消全选"
-                        : "全选"}
-                    </Button>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-                    {imageList.map((file) => (
-                      <MediaCard
-                        key={file.url}
-                        file={file}
-                        onToggle={() => handleToggle(file.url)}
-                        onPreview={() => handlePreview(file)}
-                      />
-                    ))}
-                  </div>
+                  )}
                 </div>
-              )}
               </>
               )}
             </CardContent>
@@ -1183,6 +1410,13 @@ export default function Page() {
         file={previewFile}
         previewUrl={previewUrl}
         onClose={closePreview}
+      />
+
+      {/* ── Section 代码 Dialog ──────────────────────────────────────── */}
+      <CodeDialog
+        sectionKey={viewingSection}
+        code={sectionCode}
+        onClose={closeCodeDialog}
       />
 
     </div>

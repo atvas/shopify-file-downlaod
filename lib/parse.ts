@@ -1,6 +1,57 @@
 import type { MediaFile } from "@/lib/types"
 
 /**
+ * 从 Shopify 模板 JSON 中提取引用的 section 文件。
+ *
+ * 模板 JSON 的 `sections` 字段是 `{ [id]: { type: "main-product", ... } }`
+ * 结构，`type` 对应 `sections/main-product.liquid`。
+ *
+ * 跳过 section group（header-group / footer-group），它们不是真实文件。
+ */
+export function parseSectionRefs(json: string): string[] {
+  const SECTION_GROUPS = new Set(["header-group", "footer-group"])
+
+  try {
+    const cleaned = json
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "")
+      .trim()
+    const obj = JSON.parse(cleaned)
+
+    if (!obj || typeof obj !== "object" || !obj.sections) return []
+
+    // 用模板的 order 字段决定顺序；没有则按 sections 的 key 顺序
+    const orderedKeys: string[] = Array.isArray(obj.order)
+      ? obj.order
+      : Object.keys(obj.sections)
+
+    const seen = new Set<string>()
+    const result: string[] = []
+
+    for (const key of orderedKeys) {
+      const section = obj.sections[key]
+      if (
+        !section ||
+        typeof section !== "object" ||
+        typeof (section as Record<string, unknown>).type !== "string"
+      )
+        continue
+      const type = (section as { type: string }).type
+      if (!type || SECTION_GROUPS.has(type)) continue
+      const path = `sections/${type}.liquid`
+      if (!seen.has(path)) {
+        seen.add(path)
+        result.push(path)
+      }
+    }
+
+    return result
+  } catch {
+    return []
+  }
+}
+
+/**
  * 从 Shopify 模板 JSON 中解析媒体 URL。
  * 返回 MediaFile[]，可直接用于下载列表。
  */
