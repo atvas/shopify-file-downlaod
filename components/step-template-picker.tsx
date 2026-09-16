@@ -38,7 +38,7 @@ interface StepTemplatePickerProps {
   onTemplateContent: (key: string, content: string) => Promise<void>
   onError: (msg: string) => void
   onResolvingChange: (resolving: boolean) => void
-  onSelectionStart: () => void
+  onSelectionStart: (key: string) => void
   onThemeChange: (themeId: number | null) => void
 }
 
@@ -125,7 +125,7 @@ export function StepTemplatePicker({
     async (key: string | null) => {
       if (!key) return
       if (!selectedThemeId) return
-      onSelectionStart()
+      onSelectionStart(key)
       onResolvingChange(true)
       onError("")
       try {

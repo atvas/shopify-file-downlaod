@@ -57,12 +57,12 @@ export default function Page() {
     [],
   )
 
-  const handleSelectionStart = useCallback(() => {
+  const handleSelectionStart = useCallback((key: string) => {
     setVideos([])
     setTemplateJson(null)
     setSections([])
     setViewingTemplateJson(false)
-    setSelectedKey(null)
+    setSelectedKey(key)
   }, [])
 
   const handleTemplateContent = useCallback(
