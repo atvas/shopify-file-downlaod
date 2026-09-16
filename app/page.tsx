@@ -14,6 +14,7 @@ import { StepTemplatePicker } from "@/components/step-template-picker"
 import { StepCodeInfo } from "@/components/step-code-info"
 import { StepDownload } from "@/components/step-download"
 import { ErrorBanner } from "@/components/error-banner"
+import { ImagePushDialog } from "@/components/image-push-dialog"
 
 export default function Page() {
   // ── 全局状态 ─────────────────────────────────────────────────────────
@@ -42,6 +43,24 @@ export default function Page() {
 
   // 模板 JSON 弹窗
   const [viewingTemplateJson, setViewingTemplateJson] = useState(false)
+
+  // 目标站点配置
+  const [targetDomain, setTargetDomain] = useState("")
+  const [targetToken, setTargetToken] = useState("")
+
+  // 图片 Push 弹窗
+  const [pushDialogOpen, setPushDialogOpen] = useState(false)
+  const [pushImages, setPushImages] = useState<MediaFile[]>([])
+
+  const handlePushImages = useCallback((images: MediaFile[]) => {
+    setPushImages(images)
+    setPushDialogOpen(true)
+  }, [])
+
+  const handleTargetChange = useCallback((domain: string, token: string) => {
+    setTargetDomain(domain)
+    setTargetToken(token)
+  }, [])
 
   useEffect(() => {
     setMounted(true)
@@ -290,6 +309,7 @@ export default function Page() {
         {/* Step 1: API 配置 */}
         <StepConfig
           onConfigChange={handleConfigChange}
+          onTargetChange={handleTargetChange}
           onError={setError}
         />
 
@@ -327,9 +347,12 @@ export default function Page() {
           resolving={resolving}
           storeDomain={storeDomain}
           accessToken={accessToken}
+          targetDomain={targetDomain}
+          targetToken={targetToken}
           onVideosChange={setVideos}
           onPreview={handlePreview}
           onError={setError}
+          onPushImages={handlePushImages}
         />
       </main>
 
@@ -356,6 +379,16 @@ export default function Page() {
           selectedKey?.replace(/^templates\//, "") || "template.json"
         }
         onClose={() => setViewingTemplateJson(false)}
+      />
+
+      {/* ── 图片 Push Dialog ─────────────────────────────────────── */}
+      <ImagePushDialog
+        open={pushDialogOpen}
+        images={pushImages}
+        targetDomain={targetDomain}
+        targetToken={targetToken}
+        onClose={() => setPushDialogOpen(false)}
+        onError={setError}
       />
     </div>
   )

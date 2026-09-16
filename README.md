@@ -9,9 +9,10 @@ Shopify 主题模板素材批量下载工具。从 Shopify 主题模板中提取
 - **`shopify://` 协议解析** — 通过 GraphQL / REST / CDN 探测三级策略，将 `shopify://` 路径解析为可下载的 CDN URL
 - **NDJSON 流式解析** — 解析结果逐行推送，文件一个个点亮而非全部等待
 - **批量下载** — 多文件自动打包为 ZIP，单文件直接下载，支持取消
+- **图片推送** — 将图片资源推送到目标 Shopify 站点，支持多目标站点配置切换，已存在的文件自动跳过
 - **模板代码查看** — 弹窗查看模板 JSON 原文和引用的 Section 代码，支持复制和下载
 - **素材预览** — 视频和图片在线预览，支持视频拖拽进度条
-- **配置管理** — API 凭证本地保存，支持多配置切换
+- **配置管理** — 源站点和目标站点 API 凭证分别保存，支持多配置切换
 
 ## 技术栈
 
@@ -72,6 +73,23 @@ npm run build && npm start
 | `/api/shopify-templates` | POST | `list-themes` / `list-templates` / `get-template` |
 | `/api/shopify-resolve` | POST | 将 `shopify://` URL 批量解析为 CDN 地址（NDJSON 流式） |
 | `/api/shopify-videos` | POST | 服务端代理下载（客户端 CORS 失败时回退） |
+| `/api/shopify-push` | POST | 将图片推送到目标 Shopify 站点（NDJSON 流式） |
+
+## 图片推送功能
+
+配置目标站点后，可以将图片资源直接推送到另一个 Shopify 站点：
+
+1. 在 **API 配置（Step 1）** 展开「目标站点」区域，填写域名和 Admin API Token 并保存
+2. 支持保存多个目标站点配置，通过下拉切换
+3. 在文件列表中选择要推送的图片
+4. 点击 **Push** 按钮开始推送
+5. 已存在的文件会自动跳过，推送结果实时显示
+
+**上传策略**：
+- 优先使用 `src` 模式（Shopify 从 URL 拉取），适用于 Shopify CDN 内部图片
+- 若 `src` 模式失败（如外链图片），自动切换为**服务端下载后直传**模式
+
+**权限要求**：目标站点的 Admin API Token 需要 `write_files` 权限。
 
 ## Shopify API 权限
 
@@ -79,6 +97,7 @@ npm run build && npm start
 
 - `read_themes` — 读取主题列表和模板内容
 - `read_files`  — 通过 GraphQL 解析文件 URL
+- `write_files` — 推送图片到目标站点（仅目标站点需要）
 
 ## 开发命令
 

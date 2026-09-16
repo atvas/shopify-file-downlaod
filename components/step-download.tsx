@@ -19,9 +19,12 @@ interface StepDownloadProps {
   resolving: boolean
   storeDomain: string
   accessToken: string
+  targetDomain: string
+  targetToken: string
   onVideosChange: (videos: MediaFile[]) => void
   onPreview: (file: MediaFile) => void
   onError: (msg: string) => void
+  onPushImages: (images: MediaFile[]) => void
 }
 
 export function StepDownload({
@@ -29,9 +32,12 @@ export function StepDownload({
   resolving,
   storeDomain,
   accessToken,
+  targetDomain,
+  targetToken,
   onVideosChange,
   onPreview,
   onError,
+  onPushImages,
 }: StepDownloadProps) {
   const [downloading, setDownloading] = useState(false)
   const [downloadProgress, setDownloadProgress] = useState<{
@@ -364,6 +370,37 @@ export function StepDownload({
                         图片 · {imageList.length}
                       </span>
                     </div>
+                    <div className="flex items-center gap-1">
+                    {imageList.some((v) => v.selected) &&
+                      targetDomain &&
+                      targetToken && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-6 gap-1 text-[11px]"
+                          onClick={() => {
+                            const selected = imageList.filter(
+                              (v) => v.selected,
+                            )
+                            if (selected.length > 0) onPushImages(selected)
+                          }}
+                        >
+                          <svg
+                            className="h-3 w-3"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d="M12 17V3" />
+                            <path d="m6 11 6-6 6 6" />
+                            <path d="M19 21H5" />
+                          </svg>
+                          推送到目标站点
+                        </Button>
+                      )}
                     <Button
                       variant="ghost"
                       size="sm"
@@ -379,6 +416,7 @@ export function StepDownload({
                         ? "取消全选"
                         : "全选"}
                     </Button>
+                    </div>
                   </div>
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
                     {imageList.map((file) => (
