@@ -219,8 +219,7 @@ export default function Page() {
 
   // 模板原始 JSON
   const [templateJson, setTemplateJson] = useState<string | null>(null)
-  const [templateJsonExpanded, setTemplateJsonExpanded] = useState(false)
-  const [jsonCopied, setJsonCopied] = useState(false)
+  const [viewingTemplateJson, setViewingTemplateJson] = useState(false)
 
   const handleParse = useCallback(
     async (content: string) => {
@@ -678,6 +677,7 @@ export default function Page() {
       setVideos([])
       setTemplateJson(null)
       setSections([])
+      setViewingTemplateJson(false)
       setResolving(true)
       setError("")
       try {
@@ -1015,19 +1015,41 @@ export default function Page() {
 
 
         {/* ── 模板代码信息（可折叠） ── */}
-        {(templateJson || sections.length > 0) && (
-          <div className="space-y-3 rounded-xl border border-border/40 bg-muted/30 px-4 py-3">
-            {/* 模板 JSON */}
-            {templateJson && (
-              <div className="space-y-2">
+        {(templateJson || sections.length > 0 || resolving) && (
+          <Card className="border-border/50 shadow-sm">
+            <CardContent className="space-y-3 px-6 py-4">
+              <div className="flex items-center gap-3">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-xs font-bold text-background">
+                  3
+                </span>
+                <span className="text-sm font-medium">
+                  {resolving && !templateJson ? "正在加载模板..." : "模板代码"}
+                </span>
+                {resolving && !templateJson && (
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
+                )}
+              </div>
+              {resolving && !templateJson ? (
+                <div className="space-y-2 pl-10">
+                  {Array.from({ length: 2 }).map((_, i) => (
+                    <div
+                      key={i}
+                      className="h-8 animate-pulse rounded-md bg-muted/50"
+                    />
+                  ))}
+                </div>
+              ) : (
+              <>
+              {/* 模板 JSON */}
+              {templateJson && (
                 <button
-                  onClick={() => setTemplateJsonExpanded((p) => !p)}
-                  className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-background/50"
+                  onClick={() => setViewingTemplateJson(true)}
+                  className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted/50"
                 >
                   <div className="flex items-center gap-2">
                     <div className="flex h-5 w-5 items-center justify-center">
                       <svg
-                        className="h-4 w-4 text-foreground/40"
+                        className="h-4 w-4 text-foreground/60"
                         viewBox="0 0 24 24"
                         fill="none"
                         stroke="currentColor"
@@ -1039,150 +1061,100 @@ export default function Page() {
                         <polyline points="14 2 14 8 20 8" />
                       </svg>
                     </div>
-                    <span className="text-sm text-muted-foreground">
-                      模板 JSON
+                    <span className="text-sm font-medium">模板 JSON</span>
+                    <span className="text-[11px] text-muted-foreground">
+                      {selectedKey?.replace(/^templates\//, "")}
                     </span>
                   </div>
-                  <IconChevronDown
-                    className={`h-3.5 w-3.5 text-muted-foreground/60 transition-transform ${templateJsonExpanded ? "rotate-180" : ""
-                      }`}
-                  />
+                  <svg
+                    className="h-3.5 w-3.5 text-muted-foreground"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                    <polyline points="15 3 21 3 21 9" />
+                    <line x1="10" x2="21" y1="14" y2="3" />
+                  </svg>
                 </button>
-                {templateJsonExpanded && (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between pl-2">
-                      <span className="text-xs text-muted-foreground/70">
-                        {selectedKey?.replace(/^templates\//, "")}
-                      </span>
-                      <div className="flex gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 gap-1 px-2 text-[11px] text-muted-foreground/70"
-                          onClick={() => {
-                            const blob = new Blob([templateJson], {
-                              type: "application/json",
-                            })
-                            const url = URL.createObjectURL(blob)
-                            const a = document.createElement("a")
-                            a.href = url
-                            a.download =
-                              selectedKey?.replace(
-                                /^templates\//,
-                                "",
-                              ) || "template.json"
-                            document.body.appendChild(a)
-                            a.click()
-                            URL.revokeObjectURL(url)
-                            document.body.removeChild(a)
-                          }}
+              )}
+
+              {templateJson && sections.length > 0 && (
+                <div className="mx-2 h-px bg-border/50" />
+              )}
+
+              {/* Section 列表 */}
+              {sections.length > 0 && (
+                <div className="space-y-2">
+                  <button
+                    onClick={() => setSectionsExpanded((p) => !p)}
+                    className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted/50"
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-5 w-5 items-center justify-center">
+                        <svg
+                          className="h-4 w-4 text-foreground/60"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.75"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
                         >
-                          下载
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 gap-1 px-2 text-[11px] text-muted-foreground/70"
-                          onClick={async () => {
-                            try {
-                              await navigator.clipboard.writeText(
-                                templateJson,
-                              )
-                              setJsonCopied(true)
-                              setTimeout(
-                                () => setJsonCopied(false),
-                                2000,
-                              )
-                            } catch {
-                              // ignore
-                            }
-                          }}
-                        >
-                          {jsonCopied ? "✓ 已复制" : "复制"}
-                        </Button>
+                          <rect x="3" y="3" width="7" height="7" rx="1" />
+                          <rect x="14" y="3" width="7" height="7" rx="1" />
+                          <rect x="3" y="14" width="7" height="7" rx="1" />
+                          <rect x="14" y="14" width="7" height="7" rx="1" />
+                        </svg>
                       </div>
+                      <span className="text-sm font-medium">引用的 Section</span>
+                      <span className="rounded-full bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+                        {sections.length}
+                      </span>
                     </div>
-                    <pre className="max-h-72 overflow-auto rounded-lg bg-background/60 p-3 text-[12px] leading-relaxed">
-                      <code className="font-mono text-foreground/50">
-                        {templateJson}
-                      </code>
-                    </pre>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {templateJson && sections.length > 0 && (
-              <div className="mx-2 h-px bg-border/40" />
-            )}
-
-            {/* Section 列表 */}
-            {sections.length > 0 && (
-              <div className="space-y-2">
-                <button
-                  onClick={() => setSectionsExpanded((p) => !p)}
-                  className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-background/50"
-                >
-                  <div className="flex items-center gap-2">
-                    <div className="flex h-5 w-5 items-center justify-center">
-                      <svg
-                        className="h-4 w-4 text-violet-500/60"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.75"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <rect x="3" y="3" width="7" height="7" rx="1" />
-                        <rect x="14" y="3" width="7" height="7" rx="1" />
-                        <rect x="3" y="14" width="7" height="7" rx="1" />
-                        <rect x="14" y="14" width="7" height="7" rx="1" />
-                      </svg>
-                    </div>
-                    <span className="text-sm text-muted-foreground">
-                      引用的 Section
-                    </span>
-                    <span className="rounded-full bg-violet-500/8 px-1.5 py-0.5 text-[11px] font-medium text-violet-500/70">
-                      {sections.length}
-                    </span>
-                  </div>
-                  <IconChevronDown
-                    className={`h-3.5 w-3.5 text-muted-foreground/60 transition-transform ${sectionsExpanded ? "rotate-180" : ""
+                    <IconChevronDown
+                      className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${
+                        sectionsExpanded ? "rotate-180" : ""
                       }`}
-                  />
-                </button>
-                {sectionsExpanded && (
-                  <div className="grid gap-1 pl-2">
-                    {sections.map((key) => (
-                      <button
-                        key={key}
-                        onClick={() => handleViewSection(key)}
-                        className="group flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors hover:bg-background/50"
-                      >
-                        <span className="text-muted-foreground/30 transition-colors group-hover:text-violet-500/60">
-                          <svg
-                            className="h-3 w-3"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <polyline points="9 18 15 12 9 6" />
-                          </svg>
-                        </span>
-                        <span className="truncate font-mono text-xs text-muted-foreground/70 transition-colors group-hover:text-foreground">
-                          {key}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+                    />
+                  </button>
+                  {sectionsExpanded && (
+                    <div className="grid gap-1 pl-2">
+                      {sections.map((key) => (
+                        <button
+                          key={key}
+                          onClick={() => handleViewSection(key)}
+                          className="group flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors hover:bg-muted/50"
+                        >
+                          <span className="text-muted-foreground/50 transition-colors group-hover:text-foreground">
+                            <svg
+                              className="h-3 w-3"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <polyline points="9 18 15 12 9 6" />
+                            </svg>
+                          </span>
+                          <span className="truncate font-mono text-xs text-muted-foreground transition-colors group-hover:text-foreground">
+                            {key}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              </>
+              )}
+            </CardContent>
+          </Card>
         )}
 
 
@@ -1214,7 +1186,7 @@ export default function Page() {
                 <div className="space-y-3 py-4">
                   <div className="flex items-center gap-3">
                     <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-xs font-bold text-background">
-                      3
+                      4
                     </span>
                     <span className="text-sm font-medium text-muted-foreground">
                       正在解析素材...
@@ -1236,7 +1208,7 @@ export default function Page() {
                   <div className="flex flex-wrap  items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
                       <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-xs font-bold text-background">
-                        3
+                        4
                       </span>
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium">
@@ -1419,6 +1391,17 @@ export default function Page() {
         sectionKey={viewingSection}
         code={sectionCode}
         onClose={closeCodeDialog}
+      />
+
+      {/* ── 模板 JSON Dialog ─────────────────────────────────────── */}
+      <CodeDialog
+        sectionKey={viewingTemplateJson ? "template-json" : null}
+        code={templateJson}
+        title={selectedKey?.replace(/^templates\//, "") || "模板 JSON"}
+        downloadName={
+          selectedKey?.replace(/^templates\//, "") || "template.json"
+        }
+        onClose={() => setViewingTemplateJson(false)}
       />
 
     </div>

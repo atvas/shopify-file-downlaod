@@ -7,10 +7,20 @@ interface CodeDialogProps {
   /** section 文件路径，如 sections/main-product.liquid；null = 关闭 */
   sectionKey: string | null
   code: string | null
+  /** 顶栏标题覆盖，默认使用 sectionKey */
+  title?: string
+  /** 下载文件名覆盖，默认从 sectionKey 取最后一段 */
+  downloadName?: string
   onClose: () => void
 }
 
-export function CodeDialog({ sectionKey, code, onClose }: CodeDialogProps) {
+export function CodeDialog({
+  sectionKey,
+  code,
+  title,
+  downloadName,
+  onClose,
+}: CodeDialogProps) {
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
@@ -59,7 +69,7 @@ export function CodeDialog({ sectionKey, code, onClose }: CodeDialogProps) {
               </svg>
             </span>
             <span className="truncate font-mono text-xs font-medium text-foreground/80">
-              {sectionKey}
+              {title ?? sectionKey}
             </span>
           </div>
           <div className="flex items-center gap-1.5">
@@ -70,7 +80,10 @@ export function CodeDialog({ sectionKey, code, onClose }: CodeDialogProps) {
                 const url = URL.createObjectURL(blob)
                 const a = document.createElement("a")
                 a.href = url
-                a.download = sectionKey.split("/").pop() || "section.liquid"
+                a.download =
+                  downloadName ||
+                  sectionKey.split("/").pop() ||
+                  "section.liquid"
                 document.body.appendChild(a)
                 a.click()
                 URL.revokeObjectURL(url)
