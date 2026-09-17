@@ -240,7 +240,7 @@ export function CodeDialog({
 
         {/* 代码内容 */}
         <div
-          className="relative flex-1 overflow-auto [&_pre]:m-0 [&_pre]:overflow-visible [&_pre]:rounded-none [&_pre]:border-0 [&_pre]:bg-transparent [&_pre]:pl-3 [&_pre]:pr-4 [&_pre]:text-[13px] [&_pre]:leading-relaxed [&_.line-number]:sticky [&_.line-number]:left-0 [&_.line-number]:z-[1] [&_.line-number]:inline-block [&_.line-number]:w-10 [&_.line-number]:shrink-0 [&_.line-number]:select-none [&_.line-number]:pr-3 [&_.line-number]:text-right [&_.line-number]:text-white/20"
+          className="relative flex-1 overflow-auto [&_pre]:m-0 [&_pre]:overflow-visible [&_pre]:rounded-none [&_pre]:border-0 [&_pre]:bg-transparent [&_pre]:w-fit  [&_pre]:pr-4 [&_pre]:text-[13px] [&_pre]:leading-relaxed [&_.line]:inline-block [&_.line]:min-w-full [&_.line-number]:sticky [&_.line-number]:left-0 [&_.line-number]:z-[1] [&_.line-number]:inline-block [&_.line-number]:w-10 [&_.line-number]:shrink-0 [&_.line-number]:select-none [&_.line-number]:pr-3 [&_.line-number]:text-right [&_.line-number]:text-white/20"
           style={{
             backgroundColor: bg,
             scrollbarColor: `rgba(255,255,255,0.15) transparent`,
