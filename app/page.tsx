@@ -372,7 +372,7 @@ export default function Page() {
 
       {/* ── 模板 JSON Dialog ─────────────────────────────────────── */}
       <CodeDialog
-        sectionKey={viewingTemplateJson ? "template-json" : null}
+        sectionKey={viewingTemplateJson ? (selectedKey ?? "template.json") : null}
         code={templateJson}
         title={selectedKey?.replace(/^templates\//, "") || "模板 JSON"}
         downloadName={
