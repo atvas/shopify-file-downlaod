@@ -5,7 +5,7 @@ import {
   type MediaFile,
   type ResolveResult,
 } from "@/lib/types"
-import { parseMediaUrls, parseSectionRefs } from "@/lib/parse"
+import { parseMediaUrls, parseSectionRefs, SectionRef } from "@/lib/parse"
 import { IconDownload } from "@/components/icons"
 import { PreviewDialog } from "@/components/preview-dialog"
 import { CodeDialog } from "@/components/code-dialog"
@@ -31,7 +31,7 @@ export default function Page() {
   // 模板数据
   const [templateJson, setTemplateJson] = useState<string | null>(null)
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
-  const [sections, setSections] = useState<string[]>([])
+  const [sections, setSections] = useState<SectionRef[]>([])
 
   // 预览
   const [previewFile, setPreviewFile] = useState<MediaFile | null>(null)

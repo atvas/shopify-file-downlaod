@@ -1,5 +1,10 @@
 import type { MediaFile } from "@/lib/types"
 
+export interface SectionRef {
+  path: string
+  disabled: boolean
+}
+
 /**
  * 从 Shopify 模板 JSON 中提取引用的 section 文件。
  *
@@ -7,8 +12,9 @@ import type { MediaFile } from "@/lib/types"
  * 结构，`type` 对应 `sections/main-product.liquid`。
  *
  * 跳过 section group（header-group / footer-group），它们不是真实文件。
+ * 返回 SectionRef 对象，包含 disabled 属性。
  */
-export function parseSectionRefs(json: string): string[] {
+export function parseSectionRefs(json: string): SectionRef[] {
   const SECTION_GROUPS = new Set(["header-group", "footer-group"])
 
   try {
@@ -26,7 +32,7 @@ export function parseSectionRefs(json: string): string[] {
       : Object.keys(obj.sections)
 
     const seen = new Set<string>()
-    const result: string[] = []
+    const result: SectionRef[] = []
 
     for (const key of orderedKeys) {
       const section = obj.sections[key]
@@ -39,9 +45,10 @@ export function parseSectionRefs(json: string): string[] {
       const type = (section as { type: string }).type
       if (!type || SECTION_GROUPS.has(type)) continue
       const path = `sections/${type}.liquid`
+      const disabled = !!(section as { disabled?: boolean }).disabled
       if (!seen.has(path)) {
         seen.add(path)
-        result.push(path)
+        result.push({ path, disabled })
       }
     }
 

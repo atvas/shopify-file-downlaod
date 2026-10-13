@@ -4,10 +4,12 @@ import { useState } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { IconChevronDown } from "@/components/icons"
 
+import { SectionRef } from "@/lib/parse"
+
 interface StepCodeInfoProps {
   templateJson: string | null
   selectedKey: string | null
-  sections: string[]
+  sections: SectionRef[]
   resolving: boolean
   onViewSection: (key: string) => void
   onViewTemplateJson: () => void
@@ -134,11 +136,13 @@ export function StepCodeInfo({
                 </button>
                 {sectionsExpanded && (
                   <div className="grid gap-1 pl-2">
-                    {sections.map((key) => (
+                    {sections.map((section) => (
                       <button
-                        key={key}
-                        onClick={() => onViewSection(key)}
-                        className="group flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors hover:bg-muted/50"
+                        key={section.path}
+                        onClick={() => onViewSection(section.path)}
+                        className={`group flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors hover:bg-muted/50 ${
+                          section.disabled ? "opacity-50" : ""
+                        }`}
                       >
                         <span className="text-muted-foreground/50 transition-colors group-hover:text-foreground">
                           <svg
@@ -154,8 +158,13 @@ export function StepCodeInfo({
                           </svg>
                         </span>
                         <span className="truncate font-mono text-xs text-muted-foreground transition-colors group-hover:text-foreground">
-                          {key}
+                          {section.path}
                         </span>
+                        {section.disabled && (
+                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                            未启用
+                          </span>
+                        )}
                       </button>
                     ))}
                   </div>
