@@ -6,20 +6,6 @@ export interface MediaFile {
   resolvedUrl?: string | null
 }
 
-export interface SavedConfig {
-  id: string
-  name: string
-  storeDomain: string
-  accessToken: string
-}
-
-export interface TargetConfig {
-  id: string
-  name: string
-  domain: string
-  token: string
-}
-
 /** /api/shopify-resolve 按 NDJSON 逐行推送的条目 */
 export interface ResolveResult {
   original: string
@@ -28,55 +14,65 @@ export interface ResolveResult {
   error?: string
 }
 
-export const STORAGE_KEY = "shopify-video-downloader-configs"
-export const LAST_USED_KEY = "shopify-video-downloader-last-used"
-export const TARGET_CONFIGS_KEY = "shopify-video-downloader-target-configs"
-export const TARGET_LAST_USED_KEY = "shopify-video-downloader-target-last-used"
+// ── 元对象（Metaobject）────────────────────────────────────────────────
 
-export function getSavedConfigsFromStorage(): SavedConfig[] {
-  if (typeof window === "undefined") return []
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    return stored ? JSON.parse(stored) : []
-  } catch {
-    return []
-  }
+/** 元对象定义中的单个字段定义 */
+export interface MetaobjectFieldDef {
+  key: string
+  name: string
+  type: string
+  required?: boolean | null
+  validations?: { name: string; value: string }[] | null
 }
 
-export function getLastUsedConfigFromStorage(): SavedConfig | null {
-  if (typeof window === "undefined") return null
-  try {
-    const lastUsedId = localStorage.getItem(LAST_USED_KEY)
-    if (lastUsedId) {
-      const configs = getSavedConfigsFromStorage()
-      return configs.find((c) => c.id === lastUsedId) || null
-    }
-  } catch {
-    // ignore
-  }
-  return null
+/** 元对象定义（类型） */
+export interface MetaobjectDefinition {
+  id: string
+  type: string
+  name: string
+  displayNameKey?: string | null
+  fieldDefinitions: MetaobjectFieldDef[]
 }
 
-export function getTargetConfigsFromStorage(): TargetConfig[] {
-  if (typeof window === "undefined") return []
-  try {
-    const stored = localStorage.getItem(TARGET_CONFIGS_KEY)
-    return stored ? JSON.parse(stored) : []
-  } catch {
-    return []
-  }
+/** 元对象条目上的单个字段值 */
+export interface MetaobjectField {
+  key: string
+  value: string | null
+  type: string
 }
 
-export function getLastUsedTargetFromStorage(): TargetConfig | null {
-  if (typeof window === "undefined") return null
-  try {
-    const lastUsedId = localStorage.getItem(TARGET_LAST_USED_KEY)
-    if (lastUsedId) {
-      const configs = getTargetConfigsFromStorage()
-      return configs.find((c) => c.id === lastUsedId) || null
-    }
-  } catch {
-    // ignore
-  }
-  return null
+/** 元对象条目 */
+export interface MetaobjectEntry {
+  id: string
+  type: string
+  handle: string
+  displayName: string
+  fields: MetaobjectField[]
 }
+
+/** /api/shopify-metaobjects 迁移时按 NDJSON 逐行推送的结果 */
+export interface MetaobjectMigrateResult {
+  id: string
+  name: string
+  handle: string
+  type: string
+  status: "migrated" | "skipped" | "error"
+  error?: string
+  warning?: string
+}
+
+/** 产品 / 变体元字段定义（元字段的“结构”） */
+export interface MetafieldDefinition {
+  id: string
+  ownerType: "PRODUCT" | "VARIANT"
+  namespace: string
+  key: string
+  /** 元字段类型名（single_line_text_field / list.number_integer / …） */
+  type: string
+  name: string
+  description?: string | null
+  validations?: { name: string; value: string }[] | null
+}
+
+/** /api/shopify-metafields 迁移结果，形状与元对象迁移一致 */
+export type MetafieldMigrateResult = MetaobjectMigrateResult

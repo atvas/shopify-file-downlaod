@@ -80,12 +80,12 @@ export function parseMediaUrls(json: string): MediaFile[] {
     /\.(mp4|webm|mov|avi|m4v|png|jpg|jpeg|svg|gif|webp|avif|bmp|tiff?)/i
   const urlInHtmlRe = new RegExp(
     `(?:src|href|content)=["']([^"']*${mediaExtRe.source}[^"']*)["']`,
-    "gi",
+    "gi"
   )
   const srcsetUrlRe = new RegExp(`([^"'\\s,]+${mediaExtRe.source})`, "gi")
   const cssUrlRe = new RegExp(
     `url\\(["']?([^"'\\)]*${mediaExtRe.source}[^"'\\)]*)["']?\\)`,
-    "gi",
+    "gi"
   )
 
   function tryAddUrl(raw: string): boolean {

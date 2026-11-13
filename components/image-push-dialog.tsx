@@ -2,11 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogClose,
-} from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogClose } from "@/components/ui/dialog"
 import { type MediaFile } from "@/lib/types"
 import {
   Progress,
@@ -56,7 +52,7 @@ export function ImagePushDialog({
 
   const handlePush = useCallback(async () => {
     if (!targetDomain || !targetToken) {
-      onError("请先在 API 配置中填写目标站点域名和 Token")
+      onError("请先在店铺配置中设置当前目标店铺")
       return
     }
     if (images.length === 0) return
@@ -151,7 +147,7 @@ export function ImagePushDialog({
         onClose()
       }
     },
-    [phase, onClose],
+    [phase, onClose]
   )
 
   const uploaded = results.filter((r) => r.status === "uploaded").length
@@ -159,16 +155,19 @@ export function ImagePushDialog({
   const failed = results.filter((r) => r.status === "error").length
 
   return (
-    <Dialog open={open} onOpenChange={handleClose}>
+    // 进行中禁止点遮罩关闭（与迁移弹窗一致）
+    <Dialog
+      open={open}
+      onOpenChange={handleClose}
+      disablePointerDismissal={phase === "pushing"}
+    >
       <DialogContent
         className="flex max-h-[85vh] flex-col gap-0 overflow-hidden border-0 bg-card p-0 shadow-2xl sm:max-w-lg"
         showCloseButton={false}
       >
         {/* 顶栏 */}
         <div className="flex items-center justify-between border-b border-border/50 bg-card/80 px-4 py-2.5 backdrop-blur-sm">
-          <span className="text-sm font-medium">
-            推送图片到目标站点
-          </span>
+          <span className="text-sm font-medium">推送图片到目标站点</span>
           <DialogClose
             render={
               <button className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground" />
@@ -217,14 +216,7 @@ export function ImagePushDialog({
                       strokeLinecap="round"
                       strokeLinejoin="round"
                     >
-                      <rect
-                        x="3"
-                        y="3"
-                        width="18"
-                        height="18"
-                        rx="2"
-                        ry="2"
-                      />
+                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
                       <circle cx="9" cy="9" r="2" />
                       <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
                     </svg>
@@ -234,9 +226,7 @@ export function ImagePushDialog({
               </div>
 
               <div className="flex justify-end gap-2">
-                <DialogClose
-                  render={<Button variant="ghost" size="sm" />}
-                >
+                <DialogClose render={<Button variant="ghost" size="sm" />}>
                   取消
                 </DialogClose>
                 <Button size="sm" onClick={handlePush}>
@@ -340,11 +330,7 @@ export function ImagePushDialog({
               </div>
 
               <div className="flex justify-end">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleCancel}
-                >
+                <Button variant="outline" size="sm" onClick={handleCancel}>
                   取消
                 </Button>
               </div>
@@ -386,18 +372,14 @@ export function ImagePushDialog({
                         className="flex items-center gap-2 rounded px-2 py-1 text-xs text-destructive"
                       >
                         <span className="truncate">{r.name}</span>
-                        <span className="text-destructive/60">
-                          {r.error}
-                        </span>
+                        <span className="text-destructive/60">{r.error}</span>
                       </div>
                     ))}
                 </div>
               )}
 
               <div className="flex justify-end">
-                <DialogClose render={<Button size="sm" />}>
-                  完成
-                </DialogClose>
+                <DialogClose render={<Button size="sm" />}>完成</DialogClose>
               </div>
             </>
           )}

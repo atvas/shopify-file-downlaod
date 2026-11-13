@@ -10,6 +10,7 @@ Shopify 主题模板素材批量下载工具。从 Shopify 主题模板中提取
 - **NDJSON 流式解析** — 解析结果逐行推送，文件一个个点亮而非全部等待
 - **批量下载** — 多文件自动打包为 ZIP，单文件直接下载，支持取消
 - **图片推送** — 将图片资源推送到目标 Shopify 站点，支持多目标站点配置切换，已存在的文件自动跳过
+- **元对象迁移** — 独立页面（顶栏导航进入）列出源站点全部元对象，勾选后迁移到目标站点，缺失的定义自动创建，引用字段跨店重映射
 - **模板代码查看** — 弹窗查看模板 JSON 原文和引用的 Section 代码，支持复制和下载
 - **素材预览** — 视频和图片在线预览，支持视频拖拽进度条
 - **配置管理** — 源站点和目标站点 API 凭证分别保存，支持多配置切换
@@ -26,16 +27,21 @@ Shopify 主题模板素材批量下载工具。从 Shopify 主题模板中提取
 ```
 app/
   page.tsx                        # 主页面（全局状态 + 布局组装）
+  metaobjects/page.tsx            # 元对象迁移页面（独立全屏路由）
   api/
     shopify-resolve/route.ts      # shopify:// URL 解析（NDJSON 流式响应）
     shopify-templates/route.ts    # 主题/模板列表 & 内容获取
     shopify-videos/route.ts       # 文件下载（单文件 / ZIP）
+    shopify-push/route.ts         # 图片推送（NDJSON 流式响应）
+    shopify-metaobjects/route.ts  # 元对象列表 & 迁移（NDJSON 流式）
 
 components/
   step-config.tsx                 # Step 1: API 配置
   step-template-picker.tsx        # Step 2: 主题 & 模板选择
   step-code-info.tsx              # Step 3: 模板代码信息
   step-download.tsx               # Step 4: 文件列表 & 下载
+  metaobject-migration.tsx        # 元对象迁移面板（/metaobjects 页面主体）
+  app-header.tsx                  # 顶栏 + 页面导航（素材下载 / 元对象迁移）
   error-banner.tsx                # 错误提示
   media-card.tsx                  # 素材卡片（视频/图片）
   preview-dialog.tsx              # 素材预览弹窗
@@ -45,6 +51,7 @@ components/
 
 lib/
   shopify.ts                      # Shopify Admin API 文件解析核心逻辑
+  metaobjects.ts                  # 元对象读取与跨店迁移核心逻辑
   parse.ts                        # 模板 JSON 解析（提取媒体 URL & Section 引用）
   template.ts                     # 模板名称映射 & 工具函数
   types.ts                        # 共用类型定义 & localStorage 读写
@@ -74,6 +81,7 @@ npm run build && npm start
 | `/api/shopify-resolve` | POST | 将 `shopify://` URL 批量解析为 CDN 地址（NDJSON 流式） |
 | `/api/shopify-videos` | POST | 服务端代理下载（客户端 CORS 失败时回退） |
 | `/api/shopify-push` | POST | 将图片推送到目标 Shopify 站点（NDJSON 流式） |
+| `/api/shopify-metaobjects` | POST | `list` 元对象列表 / `migrate` 迁移到目标站点（NDJSON 流式） |
 
 ## 图片推送功能
 
@@ -91,6 +99,22 @@ npm run build && npm start
 
 **权限要求**：目标站点的 Admin API Token 需要 `write_files` 权限。
 
+## 元对象迁移功能
+
+配置源站点与目标站点后，可以批量迁移元对象（Metaobject）：
+
+1. 从顶栏导航进入 **元对象迁移** 页面，点击 **加载元对象**，拉取源站点全部元对象定义与条目
+2. 条目按定义类型分组展示，勾选要迁移的条目（支持按组全选 / 全选）
+3. 点击 **迁移所选** 开始迁移，结果逐条实时显示
+
+**迁移策略**：
+- 目标站点缺失的元对象定义（含字段结构）自动创建
+- 目标站点已有同 handle 的条目自动跳过
+- 引用字段跨店重映射：元对象引用按 type+handle 对齐，文件引用按文件名对齐
+- 产品等其他跨店引用暂不迁移（跳过并在结果中提示）；源店铺 GID 绝不直接写入目标店铺，解析不了的引用一律留空并警告
+
+**权限要求**：源站点 Token 需要 `read_metaobjects` + `read_metaobject_definitions`，目标站点 Token 需要 `write_metaobjects` + `write_metaobject_definitions`。
+
 ## Shopify API 权限
 
 需要以下 Admin API Access Token 权限（scopes）：
@@ -98,6 +122,8 @@ npm run build && npm start
 - `read_themes` — 读取主题列表和模板内容
 - `read_files`  — 通过 GraphQL 解析文件 URL
 - `write_files` — 推送图片到目标站点（仅目标站点需要）
+- `read_metaobjects` / `read_metaobject_definitions` — 读取元对象（源站点）
+- `write_metaobjects` / `write_metaobject_definitions` — 迁移元对象（仅目标站点需要）
 
 ## 开发命令
 

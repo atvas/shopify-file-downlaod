@@ -25,7 +25,7 @@ interface RequestBody {
 async function fileExists(
   domain: string,
   token: string,
-  fileName: string,
+  fileName: string
 ): Promise<boolean> {
   // 搜索策略：先用精确文件名，再去掉扩展名搜一次
   const stem = fileName.replace(/\.[^.]+$/, "")
@@ -51,7 +51,7 @@ async function fileExists(
           Accept: "application/json",
         },
         body: JSON.stringify({ query: gql }),
-      },
+      }
     )
 
     if (!res.ok) continue
@@ -92,12 +92,11 @@ async function fileExists(
           "Content-Type": "application/json",
           Accept: "application/json",
         },
-      },
+      }
     )
     if (restRes.ok) {
       const restData = await restRes.json()
-      const files: { alt?: string; filename?: string }[] =
-        restData.files ?? []
+      const files: { alt?: string; filename?: string }[] = restData.files ?? []
       const lowerName = fileName.toLowerCase()
       const lowerStem = stem.toLowerCase()
       for (const f of files) {
@@ -120,7 +119,7 @@ async function createStagedUpload(
   token: string,
   fileName: string,
   mimeType: string,
-  fileSize: number,
+  fileSize: number
 ): Promise<StagedUploadTarget> {
   const mutation = `mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
     stagedUploadsCreate(input: $input) {
@@ -156,7 +155,7 @@ async function createStagedUpload(
           ],
         },
       }),
-    },
+    }
   )
 
   if (!res.ok) {
@@ -184,7 +183,7 @@ async function uploadViaStagedUpload(
   token: string,
   imageBuffer: ArrayBuffer,
   fileName: string,
-  mimeType: string,
+  mimeType: string
 ): Promise<void> {
   // 1. 创建 staged upload
   const staged = await createStagedUpload(
@@ -192,7 +191,7 @@ async function uploadViaStagedUpload(
     token,
     fileName,
     mimeType,
-    imageBuffer.byteLength,
+    imageBuffer.byteLength
   )
 
   // 2. 上传到 staged URL
@@ -240,7 +239,7 @@ async function uploadViaStagedUpload(
           ],
         },
       }),
-    },
+    }
   )
 
   if (!createRes.ok) {
@@ -257,7 +256,7 @@ async function uploadViaStagedUpload(
 
 /** 下载图片到服务端 */
 async function downloadImage(
-  imageUrl: string,
+  imageUrl: string
 ): Promise<{ buffer: ArrayBuffer; mimeType: string }> {
   const res = await fetch(imageUrl)
   if (!res.ok) {
@@ -275,7 +274,7 @@ async function uploadFile(
   domain: string,
   token: string,
   imageUrl: string,
-  fileName: string,
+  fileName: string
 ): Promise<"src" | "direct"> {
   // 策略 1: src 模式（适用于 Shopify 内部 CDN URL）
   const srcUrl = `https://${domain}/admin/api/${SHOPIFY_API_VERSION}/files.json`
@@ -315,7 +314,7 @@ async function uploadFile(
     throw new Error(
       `上传失败:\n` +
         `- src 模式 (${srcRes.status}): ${srcError}\n` +
-        `- 直接上传: ${directErr instanceof Error ? directErr.message : "未知错误"}`,
+        `- 直接上传: ${directErr instanceof Error ? directErr.message : "未知错误"}`
     )
   }
 }
@@ -326,10 +325,7 @@ export async function POST(request: Request) {
     const { targetDomain, targetToken, images } = body
 
     if (!targetDomain || !targetToken) {
-      return NextResponse.json(
-        { error: "缺少目标站点凭证" },
-        { status: 400 },
-      )
+      return NextResponse.json({ error: "缺少目标站点凭证" }, { status: 400 })
     }
     if (!images || images.length === 0) {
       return NextResponse.json({ error: "没有要推送的图片" }, { status: 400 })
@@ -357,7 +353,7 @@ export async function POST(request: Request) {
               domain,
               targetToken,
               img.url,
-              img.name,
+              img.name
             )
             write({
               name: img.name,
@@ -386,7 +382,7 @@ export async function POST(request: Request) {
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "推送失败" },
-      { status: 500 },
+      { status: 500 }
     )
   }
 }

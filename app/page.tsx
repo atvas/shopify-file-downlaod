@@ -1,15 +1,12 @@
 "use client"
 
-import { useState, useCallback, useEffect } from "react"
-import {
-  type MediaFile,
-  type ResolveResult,
-} from "@/lib/types"
+import { useState, useCallback, useRef } from "react"
+import { type MediaFile, type ResolveResult } from "@/lib/types"
 import { parseMediaUrls, parseSectionRefs, SectionRef } from "@/lib/parse"
-import { IconDownload } from "@/components/icons"
+import { getCurrentSource, getCurrentTarget } from "@/lib/stores"
+import { useMounted } from "@/hooks/use-mounted"
 import { PreviewDialog } from "@/components/preview-dialog"
 import { CodeDialog } from "@/components/code-dialog"
-import { StepConfig } from "@/components/step-config"
 import { StepTemplatePicker } from "@/components/step-template-picker"
 import { StepCodeInfo } from "@/components/step-code-info"
 import { StepDownload } from "@/components/step-download"
@@ -18,14 +15,14 @@ import { ImagePushDialog } from "@/components/image-push-dialog"
 
 export default function Page() {
   // ── 全局状态 ─────────────────────────────────────────────────────────
-  const [mounted, setMounted] = useState(false)
+  const mounted = useMounted()
   const [videos, setVideos] = useState<MediaFile[]>([])
   const [error, setError] = useState("")
   const [resolving, setResolving] = useState(false)
 
-  // API 凭证（由 StepConfig 向上同步）
-  const [storeDomain, setStoreDomain] = useState("")
-  const [accessToken, setAccessToken] = useState("")
+  // API 凭证：来自店铺配置页（/config）的「当前源 / 当前目标」
+  const [storeDomain] = useState(() => getCurrentSource()?.domain ?? "")
+  const [accessToken] = useState(() => getCurrentSource()?.token ?? "")
   const [selectedThemeId, setSelectedThemeId] = useState<number | null>(null)
 
   // 模板数据
@@ -44,9 +41,9 @@ export default function Page() {
   // 模板 JSON 弹窗
   const [viewingTemplateJson, setViewingTemplateJson] = useState(false)
 
-  // 目标站点配置
-  const [targetDomain, setTargetDomain] = useState("")
-  const [targetToken, setTargetToken] = useState("")
+  // 目标站点（店铺配置的「当前目标」，可选）
+  const [targetDomain] = useState(() => getCurrentTarget()?.domain ?? "")
+  const [targetToken] = useState(() => getCurrentTarget()?.token ?? "")
 
   // 图片 Push 弹窗
   const [pushDialogOpen, setPushDialogOpen] = useState(false)
@@ -57,24 +54,7 @@ export default function Page() {
     setPushDialogOpen(true)
   }, [])
 
-  const handleTargetChange = useCallback((domain: string, token: string) => {
-    setTargetDomain(domain)
-    setTargetToken(token)
-  }, [])
-
-  useEffect(() => {
-    setMounted(true)
-  }, [])
-
   // ── 回调 ─────────────────────────────────────────────────────────────
-
-  const handleConfigChange = useCallback(
-    (domain: string, token: string) => {
-      setStoreDomain(domain)
-      setAccessToken(token)
-    },
-    [],
-  )
 
   const handleSelectionStart = useCallback((key: string) => {
     setVideos([])
@@ -82,6 +62,14 @@ export default function Page() {
     setSections([])
     setViewingTemplateJson(false)
     setSelectedKey(key)
+  }, [])
+
+  // 选完模板解析出素材后，自动把视口带到素材/下载区
+  const resultsRef = useRef<HTMLDivElement | null>(null)
+  const scrollToResults = useCallback(() => {
+    requestAnimationFrame(() =>
+      resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
+    )
   }, [])
 
   const handleTemplateContent = useCallback(
@@ -110,13 +98,16 @@ export default function Page() {
 
         if (shopifyUrls.length > 0) {
           if (!storeDomain || !accessToken) {
-            setError("存在 shopify:// 协议的文件，请先配置 API 凭证再解析")
+            setError(
+              "存在 shopify:// 协议的文件，请先在店铺配置中设置当前源店铺再解析"
+            )
             setVideos(direct)
             return
           }
 
           setResolving(true)
           setVideos(direct)
+          scrollToResults()
 
           const failures: string[] = []
 
@@ -133,7 +124,7 @@ export default function Page() {
                   resolvedUrl: hit.resolved,
                   name: hit.filename || f.name,
                 }
-              }),
+              })
             )
           }
 
@@ -185,7 +176,7 @@ export default function Page() {
                     } catch {
                       return []
                     }
-                  }),
+                  })
               )
             }
 
@@ -207,12 +198,13 @@ export default function Page() {
           }
         } else {
           setVideos(direct)
+          scrollToResults()
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "解析失败")
       }
     },
-    [storeDomain, accessToken],
+    [storeDomain, accessToken, scrollToResults]
   )
 
   // ── Section 代码查看 ────────────────────────────────────────────────
@@ -238,11 +230,11 @@ export default function Page() {
         setSectionCode(data.content ?? "")
       } catch (err) {
         setSectionCode(
-          `// 加载失败: ${err instanceof Error ? err.message : "未知错误"}`,
+          `// 加载失败: ${err instanceof Error ? err.message : "未知错误"}`
         )
       }
     },
-    [selectedThemeId, storeDomain, accessToken],
+    [selectedThemeId, storeDomain, accessToken]
   )
 
   const closeCodeDialog = useCallback(() => {
@@ -267,81 +259,44 @@ export default function Page() {
   // ── Loading skeleton ────────────────────────────────────────────────
   if (!mounted) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background p-6">
+      <div className="flex min-h-[60vh] items-center justify-center">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
       </div>
     )
   }
 
-  const isConfigured = !!storeDomain && !!accessToken
-
   return (
-    <div className="relative min-h-screen bg-background">
-      {/* 顶部渐变装饰 */}
-      <div className="pointer-events-none fixed inset-x-0 top-0 h-[400px] bg-gradient-to-b from-primary/[0.03] to-transparent dark:from-primary/[0.05]" />
+    <div className="mx-auto w-full max-w-6xl space-y-6 px-4 py-6 md:px-6">
+      {/* Step 1: 选择主题 & 模板 */}
+      <StepTemplatePicker
+        storeDomain={storeDomain}
+        accessToken={accessToken}
+        resolving={resolving}
+        videoCount={videos.filter((v) => v.type === "video").length}
+        imageCount={videos.filter((v) => v.type === "image").length}
+        selectedKey={selectedKey}
+        onTemplateContent={handleTemplateContent}
+        onError={setError}
+        onResolvingChange={setResolving}
+        onSelectionStart={handleSelectionStart}
+        onThemeChange={setSelectedThemeId}
+      />
 
-      {/* ── 顶栏 ─────────────────────────────────────────────────────── */}
-      <header className="sticky top-0 z-10 border-b border-border/50 bg-background/70 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-4xl items-center justify-between px-6 py-3.5">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-foreground text-background">
-              <IconDownload className="h-4 w-4" />
-            </div>
-            <div>
-              <span className="text-sm font-semibold tracking-tight">
-                Shopify Asset Downloader
-              </span>
-              <p className="text-[10px] text-muted-foreground/60">
-                模板素材批量下载工具
-              </p>
-            </div>
-          </div>
-          {isConfigured && (
-            <span className="flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
-              已连接
-            </span>
-          )}
-        </div>
-      </header>
+      {/* Step 2: 模板代码信息 */}
+      <StepCodeInfo
+        templateJson={templateJson}
+        selectedKey={selectedKey}
+        sections={sections}
+        resolving={resolving}
+        onViewSection={handleViewSection}
+        onViewTemplateJson={() => setViewingTemplateJson(true)}
+      />
 
-      <main className="relative mx-auto max-w-4xl space-y-6 px-6 py-10">
-        {/* Step 1: API 配置 */}
-        <StepConfig
-          onConfigChange={handleConfigChange}
-          onTargetChange={handleTargetChange}
-          onError={setError}
-        />
+      {/* 错误提示 */}
+      <ErrorBanner error={error} />
 
-        {/* Step 2: 选择主题 & 模板 */}
-        <StepTemplatePicker
-          storeDomain={storeDomain}
-          accessToken={accessToken}
-          resolving={resolving}
-          videoCount={videos.filter((v) => v.type === "video").length}
-          imageCount={videos.filter((v) => v.type === "image").length}
-          selectedKey={selectedKey}
-          onTemplateContent={handleTemplateContent}
-          onError={setError}
-          onResolvingChange={setResolving}
-          onSelectionStart={handleSelectionStart}
-          onThemeChange={setSelectedThemeId}
-        />
-
-        {/* Step 3: 模板代码信息 */}
-        <StepCodeInfo
-          templateJson={templateJson}
-          selectedKey={selectedKey}
-          sections={sections}
-          resolving={resolving}
-          onViewSection={handleViewSection}
-          onViewTemplateJson={() => setViewingTemplateJson(true)}
-        />
-
-        {/* 错误提示 */}
-        <ErrorBanner error={error} />
-
-        {/* Step 4: 文件下载 */}
+      {/* Step 3: 文件下载 */}
+      <div ref={resultsRef} className="scroll-mt-20">
         <StepDownload
           videos={videos}
           resolving={resolving}
@@ -354,8 +309,7 @@ export default function Page() {
           onError={setError}
           onPushImages={handlePushImages}
         />
-      </main>
-
+      </div>
       {/* ── 预览 Dialog ──────────────────────────────────────────────── */}
       <PreviewDialog
         file={previewFile}
@@ -372,7 +326,9 @@ export default function Page() {
 
       {/* ── 模板 JSON Dialog ─────────────────────────────────────── */}
       <CodeDialog
-        sectionKey={viewingTemplateJson ? (selectedKey ?? "template.json") : null}
+        sectionKey={
+          viewingTemplateJson ? (selectedKey ?? "template.json") : null
+        }
         code={templateJson}
         title={selectedKey?.replace(/^templates\//, "") || "模板 JSON"}
         downloadName={

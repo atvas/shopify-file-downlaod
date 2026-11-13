@@ -52,22 +52,20 @@ export function StepDownload({
 
   const videoList = useMemo(
     () => videos.filter((v) => v.type === "video"),
-    [videos],
+    [videos]
   )
   const imageList = useMemo(
     () => videos.filter((v) => v.type === "image"),
-    [videos],
+    [videos]
   )
 
   const handleToggle = useCallback(
     (url: string) => {
       onVideosChange(
-        videos.map((v) =>
-          v.url === url ? { ...v, selected: !v.selected } : v,
-        ),
+        videos.map((v) => (v.url === url ? { ...v, selected: !v.selected } : v))
       )
     },
-    [videos, onVideosChange],
+    [videos, onVideosChange]
   )
 
   const handleSelectAll = useCallback(() => {
@@ -81,10 +79,10 @@ export function StepDownload({
   const handleToggleType = useCallback(
     (type: "video" | "image", select: boolean) => {
       onVideosChange(
-        videos.map((v) => (v.type === type ? { ...v, selected: select } : v)),
+        videos.map((v) => (v.type === type ? { ...v, selected: select } : v))
       )
     },
-    [videos, onVideosChange],
+    [videos, onVideosChange]
   )
 
   const handleCancelDownload = useCallback(() => {
@@ -97,7 +95,7 @@ export function StepDownload({
     const selected = videos.filter((v) => v.selected)
     if (selected.length === 0) return
     if (!storeDomain || !accessToken) {
-      onError("请先填写店铺域名和 API Token")
+      onError("请先在店铺配置中设置当前源店铺")
       return
     }
 
@@ -127,7 +125,7 @@ export function StepDownload({
             : JSON.stringify(data.details)
           : ""
         throw new Error(
-          `${data.error}${errorDetails ? ":\n" + errorDetails : ""}`,
+          `${data.error}${errorDetails ? ":\n" + errorDetails : ""}`
         )
       }
       const blob = await response.blob()
@@ -135,7 +133,7 @@ export function StepDownload({
         blob,
         selected.length === 1
           ? selected[0].name
-          : `shopify-assets-${Date.now()}.zip`,
+          : `shopify-assets-${Date.now()}.zip`
       )
     }
 
@@ -215,7 +213,7 @@ export function StepDownload({
           <div className="space-y-3 py-4">
             <div className="flex items-center gap-3">
               <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-xs font-bold text-background">
-                4
+                3
               </span>
               <span className="text-sm font-medium text-muted-foreground">
                 正在解析素材...
@@ -237,7 +235,7 @@ export function StepDownload({
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-xs font-bold text-background">
-                  4
+                  3
                 </span>
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium">
@@ -337,15 +335,11 @@ export function StepDownload({
                       size="sm"
                       className="h-6 text-[11px] text-muted-foreground"
                       onClick={() => {
-                        const allSelected = videoList.every(
-                          (v) => v.selected,
-                        )
+                        const allSelected = videoList.every((v) => v.selected)
                         handleToggleType("video", !allSelected)
                       }}
                     >
-                      {videoList.every((v) => v.selected)
-                        ? "取消全选"
-                        : "全选"}
+                      {videoList.every((v) => v.selected) ? "取消全选" : "全选"}
                     </Button>
                   </div>
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
@@ -371,51 +365,49 @@ export function StepDownload({
                       </span>
                     </div>
                     <div className="flex items-center gap-1">
-                    {imageList.some((v) => v.selected) &&
-                      targetDomain &&
-                      targetToken && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-6 gap-1 text-[11px]"
-                          onClick={() => {
-                            const selected = imageList.filter(
-                              (v) => v.selected,
-                            )
-                            if (selected.length > 0) onPushImages(selected)
-                          }}
-                        >
-                          <svg
-                            className="h-3 w-3"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
+                      {imageList.some((v) => v.selected) &&
+                        targetDomain &&
+                        targetToken && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-6 gap-1 text-[11px]"
+                            onClick={() => {
+                              const selected = imageList.filter(
+                                (v) => v.selected
+                              )
+                              if (selected.length > 0) onPushImages(selected)
+                            }}
                           >
-                            <path d="M12 17V3" />
-                            <path d="m6 11 6-6 6 6" />
-                            <path d="M19 21H5" />
-                          </svg>
-                          推送到目标站点
-                        </Button>
-                      )}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 text-[11px] text-muted-foreground"
-                      onClick={() => {
-                        const allSelected = imageList.every(
-                          (v) => v.selected,
-                        )
-                        handleToggleType("image", !allSelected)
-                      }}
-                    >
-                      {imageList.every((v) => v.selected)
-                        ? "取消全选"
-                        : "全选"}
-                    </Button>
+                            <svg
+                              className="h-3 w-3"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <path d="M12 17V3" />
+                              <path d="m6 11 6-6 6 6" />
+                              <path d="M19 21H5" />
+                            </svg>
+                            推送到目标站点
+                          </Button>
+                        )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 text-[11px] text-muted-foreground"
+                        onClick={() => {
+                          const allSelected = imageList.every((v) => v.selected)
+                          handleToggleType("image", !allSelected)
+                        }}
+                      >
+                        {imageList.every((v) => v.selected)
+                          ? "取消全选"
+                          : "全选"}
+                      </Button>
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">

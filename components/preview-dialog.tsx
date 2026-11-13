@@ -3,11 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from "react"
 import type { MediaFile } from "@/lib/types"
 import { IconVideo, IconImage } from "@/components/icons"
-import {
-  Dialog,
-  DialogContent,
-  DialogClose,
-} from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogClose } from "@/components/ui/dialog"
 
 export function PreviewDialog({
   file,
@@ -41,7 +37,7 @@ export function PreviewDialog({
     (open: boolean) => {
       if (!open) onClose()
     },
-    [onClose],
+    [onClose]
   )
 
   const handleMediaReady = useCallback(() => {

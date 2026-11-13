@@ -125,7 +125,7 @@ function isPlaylist(source: VideoSource): boolean {
  * 用户选定：最高画质 MP4 转码版。`sources` 里除了各档 mp4，还混着 Shopify
  * 自动生成的 m3u8（HLS 播放列表）—— 那是个几 KB 的文本清单，直接下下来
  * 既播不了也不是视频。所以这里必须把它滤掉，再按分辨率取最高档。
- */ 
+ */
 export function pickBestVideoSource(node: FileNode): string | null {
   const usable = (node.sources ?? []).filter(
     (source) => !!source.url && !isPlaylist(source)
@@ -153,7 +153,7 @@ export function nodeDownloadUrl(node: FileNode): string | null {
 }
 
 /** decodeURIComponent 遇到残缺的 % 转义会抛，兜住 */
-function safeDecode(value: string): string {
+export function safeDecode(value: string): string {
   try {
     return decodeURIComponent(value)
   } catch {
@@ -376,10 +376,7 @@ export async function batchResolve(
    * 每个别名的结果只属于那个文件名，不存在节点争抢，但保留去重以防
    * 同一个名字在不同轮次（完整名 vs 去扩展名）被重复处理。
    */
-  const claimFromAlias = (
-    name: string,
-    nodes: FileNode[]
-  ) => {
+  const claimFromAlias = (name: string, nodes: FileNode[]) => {
     if (resolved.has(name)) return
 
     for (const node of nodes) {

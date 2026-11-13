@@ -9,11 +9,7 @@ interface RequestBody {
   key?: string
 }
 
-async function shopifyFetch(
-  domain: string,
-  accessToken: string,
-  path: string
-) {
+async function shopifyFetch(domain: string, accessToken: string, path: string) {
   return fetch(`https://${domain}/admin/api/${SHOPIFY_API_VERSION}${path}`, {
     headers: {
       "X-Shopify-Access-Token": accessToken,
@@ -56,7 +52,7 @@ export async function POST(request: Request) {
             name: t.name,
             role: t.role,
             updatedAt: t.updated_at,
-          }),
+          })
         )
         return NextResponse.json({ themes })
       }
@@ -65,10 +61,7 @@ export async function POST(request: Request) {
       case "list-templates": {
         const { themeId } = body
         if (!themeId) {
-          return NextResponse.json(
-            { error: "缺少 themeId" },
-            { status: 400 }
-          )
+          return NextResponse.json({ error: "缺少 themeId" }, { status: 400 })
         }
 
         const res = await shopifyFetch(
@@ -122,10 +115,7 @@ export async function POST(request: Request) {
         const value = data.asset?.value ?? null
 
         if (!value) {
-          return NextResponse.json(
-            { error: "模板内容为空" },
-            { status: 404 }
-          )
+          return NextResponse.json({ error: "模板内容为空" }, { status: 404 })
         }
 
         return NextResponse.json({ content: value })

@@ -28,22 +28,25 @@ npm run typecheck  # TypeScript type checking (no emit)
 
 There is no test framework configured — no test script, runner, or spec files.
 
-`npm run lint` currently exits non-zero on one pre-existing error, not caused by your
-change: `react-hooks/set-state-in-effect` at `app/page.tsx:252` (the `setMounted(true)`
-mount guard). There are also two pre-existing `@next/next/no-img-element` warnings for
-the deliberate raw `<img>` tags in `app/page.tsx`. Don't treat these as regressions.
+`npm run lint` currently exits non-zero on pre-existing `react-hooks/set-state-in-effect`
+errors in `components/code-dialog.tsx` (×2) and `components/image-push-dialog.tsx`.
+There are also pre-existing warnings: `@next/next/no-img-element` for the deliberate raw
+`<img>` tags in `components/media-card.tsx` / `components/preview-dialog.tsx`, and an
+unused `MAX_PAGE_SIZE` in `lib/shopify.ts`. Don't treat these as regressions — but don't
+add new ones either: setState inside effects must go through promise/event callbacks,
+never synchronously (see `hooks/use-mounted.ts` and the `refreshTargetTypes` pattern in
+`components/metaobject-migration.tsx`).
 
 ## Architecture
 
 ### Request flow
 
-The whole feature is one client component plus two route handlers:
+The download feature is a client page plus two route handlers:
 
-1. **`app/page.tsx`** — a single ~1000-line `"use client"` component holding all state:
-   API credentials, saved configs, parsed file list, selection, preview, and error.
-   There are no extracted hooks or feature components; `hooks/` is empty. Parsing
-   (`parseMediaUrls`), storage helpers, and inline SVG icon components all live in this
-   file alongside the page.
+1. **`app/page.tsx`** — the main `"use client"` page holding feature state (parsed file
+   list, selection, preview, error). API credentials are read from the shared store
+   config (`lib/stores.ts`) at mount — business pages carry no config UI. Parsing lives
+   in `lib/parse.ts`; step panels and dialogs live in `components/`.
 2. **`app/api/shopify-resolve/route.ts`** — `POST`, takes the `shopify://` URLs from the
    parsed list and **streams** results back as NDJSON — one line per file, emitted the
    moment that file resolves. It has to stream: returning one payload at the end meant a
@@ -142,19 +145,128 @@ accident:
   comparison against `hero image.png` never matches `hero%20image.png` and the file gets
   misfiled as "not found". `nodeMatches` runs `safeDecode` first.
 
-### Credentials
+### Credentials (`lib/stores.ts` + the `/config` page)
 
-Store domain and Admin API access token are entered in the browser, kept in
-`localStorage` (keys prefixed `shopify-video-downloader-`), and sent to the route
-handlers in each POST body. There is no server-side session, database, or env-var
-config — the server is stateless and the token is used only to call the Shopify Admin
-API for that request, with `X-Shopify-Access-Token`. The Shopify API version is
+API credentials are managed on their own page (`app/config/page.tsx` +
+`components/store-config.tsx`): one **unified store list** (localStorage key
+`shopify-video-downloader-stores`, entries `{ id, name, domain, token }`) plus two
+pointers, `shopify-video-downloader-current-source` / `-current-target` (store ids).
+A store holds at most one role — checking one role evicts the store's other
+role (the pointer setters cross-clear on collision; legacy collisions keep 源).
+Business pages (`app/page.tsx`, `app/metaobjects/page.tsx`,
+`app/metafields/page.tsx`) carry **no config UI** —
+they read `getCurrentSource()` / `getCurrentTarget()` at mount and never change them;
+to switch stores the user goes to 店铺配置. Legacy source/target list keys are merged
+into the unified list on first read (`ensureMigrated`), so old setups keep working.
+
+Each store's domain and token are entered in the browser, kept in `localStorage`
+(keys prefixed `shopify-video-downloader-`), and sent to the route handlers in each
+POST body. There is no server-side session, database, or env-var config — the server
+is stateless and the token is used only to call the Shopify Admin API for that
+request, with `X-Shopify-Access-Token`. The Shopify API version is
 hardcoded to `2024-01` in both routes.
 
 Consequently, requests proxy a user-supplied token to a user-supplied domain. Keep it
 that way, and never log the token value. The token header belongs only on Admin API
 calls — the CDN is public read, so the download `fetch` deliberately sends no
 `X-Shopify-Access-Token`.
+
+### Metafield migration (`lib/metafields.ts` + `app/api/shopify-metafields`)
+
+Product/variant metafield migration lives on `app/metafields/page.tsx` (nav
+产品元字段); the panel is `components/metafield-migration.tsx`. Same conventions
+as metaobject migration: streaming NDJSON with **one line per checked definition
+(failures included)**, writes through `mapWithConcurrency` (at 4), results
+scoped to the checked items.
+
+Migration copies only the **definitions** (namespace/key/type/name/…) to the
+target — missing ones are created, existing ones reported as "skipped".
+**Field values on products/variants are deliberately NOT migrated**: value
+migration needs cross-store product/variant alignment and is out of scope —
+don't quietly reintroduce it.
+
+Schema facts (2024-01):
+
+- **`MetafieldOwnerType` uses `PRODUCTVARIANT`**, not `VARIANT` — a wrong enum
+  value rejects the whole variable with "provided invalid value". The internal
+  model stays PRODUCT/VARIANT and `WIRE_OWNER_TYPE` maps at the GraphQL boundary.
+- **Never give the definition-create mutation a typed variable.** In 2024-01 the
+  input type is *not* `MetafieldDefinitionCreateInput` ("isn't a defined input
+  type") and the payload's definition field is *not* `metafieldDefinition`.
+  `buildDefinitionCreateMutation` inlines the `definition:` literal (schema
+  infers the type) and selects only `userErrors` — don't "tidy" it back into
+  `$definition: SomeInput!`.
+- **`metafieldDefinitions(ownerType:)` is required** — PRODUCT and VARIANT are
+  fetched as two queries.
+- **A definition's `type` is a `MetafieldDefinitionType` object** — query with
+  `type { name }` and flatten for create input (same trap as metaobject field
+  definitions).
+- **A definition's `validations` can carry source-store GIDs** — e.g.
+  `metaobject_reference` definitions store `metaobject_definition_id` as
+  `gid://shopify/MetaobjectDefinition/<source id>`, which the target rejects
+  ("must be a valid metaobject definition belonging to your shop") even when the
+  metaobject exists there. `migrateMetafields` remaps those by identity
+  (source GID → definition `type` → target GID) and drops any other `gid://`
+  validation values with a warning — same cross-store rule as metaobject refs.
+- Standard metafields live in the reserved **`shopify` namespace** and are
+  excluded from listing (`isSystemMetafieldDef`).
+
+### Metaobject migration (`lib/metaobjects.ts` + `app/api/shopify-metaobjects`)
+
+Metaobject migration (definitions + entries, source store → target store) lives
+on its own full-screen route `app/metaobjects/page.tsx`, reached from the sidebar
+nav (`components/app-sidebar.tsx`, shared by all pages). Credentials come from the shared
+store config (`lib/stores.ts`, see above) — source = 当前源店铺, target =
+当前目标店铺. The panel itself is `components/metaobject-migration.tsx`; it is
+deliberately not part of the main page's step flow.
+
+The API route has three actions: `list` returns the source store's custom
+definitions and their entries as one JSON payload (Shopify's reserved system
+types — `shopify--*` — are excluded at fetch time via `isSystemMetaobjectType`,
+so their huge entry lists are never enumerated); `migrate` streams NDJSON —
+**one line per selected entry, failures included**, same rule as
+`shopify-resolve`; `target-definitions`
+returns just the definition types the target store already has (the group-header
+badges in the panel read this). `migrate` with `definitionsOnly: true` creates
+only the missing definitions in the target (one result line per definition,
+"skipped" when the type already exists) and touches no entries — the panel's
+「只迁移定义」 toggle uses this. The client scopes both modes to the checked
+items: in definitions-only mode it sends only the definitions whose `type`
+appears among the selected entries' types.
+
+**Never write a source-store GID into the target store.** GID numeric ranges
+overlap between shops — `gid://shopify/Product/123` in the target can be a
+completely unrelated resource, so a raw-copied reference silently points at the
+wrong data (worse than failing). Reference fields are remapped by identity
+instead: `metaobject_reference` by `type` + `handle`, `file_reference` by
+filename (via `nodeMatches`, so the video-hash and decode traps above apply
+too). Anything unresolvable is left empty with a per-entry warning. Other
+reference kinds (product, collection, …) are skipped with a warning — there is
+no reliable cross-store identity for them.
+
+Migration is round-based (`MAX_ROUNDS`): an entry whose required reference
+points at a not-yet-created entry retries on later rounds, and the final round
+reports everything that is still stuck instead of leaving spinners. Missing
+definitions are auto-created in the target from the source field structure;
+entries whose `handle` already exists in the target are skipped. Like
+`shopify-resolve`, everything goes through `mapWithConcurrency` — writes run at
+`ENTRY_CONCURRENCY` (4), never `Promise.all`, never serial.
+
+Three schema facts, verified against 2024-01 by introspection — each one makes
+Shopify reject the **entire** query, so don't "simplify" any of them:
+
+- **`MetaobjectFieldDefinition.type` is a `MetafieldDefinitionType` object**, not
+  a string — the query must say `type { name }` (a bare `type` dies with "Field
+  must have selections"). The definition-create input takes that `name` as a
+  plain string, hence `normalizeDefinition` flattens it back. Conversely
+  **`MetaobjectField.type` (on entries) IS a plain String** — rewriting it to
+  `type { name }` breaks the entries query with the inverse error.
+- **`QueryRoot.metaobjects(type:)` is required (`String!`)** in 2024-01. There is
+  no "all types" listing — `fetchAllMetaobjectEntries` enumerates one type per
+  definition (bounded concurrency). Passing `type: null` fails validation.
+- Tokens without the metaobject scopes fail at **execution** time with "Access
+  denied for metaobjectDefinitions field." — this is what you see after the
+  query shape is already correct; the fix is scopes on the Shopify side.
 
 ### Component and styling conventions
 
@@ -165,6 +277,22 @@ calls — the CDN is public read, so the download `fetch` deliberately sends no
 - `components/theme-provider.tsx` — wraps `next-themes` and registers a global hotkey:
   pressing `d` toggles dark/light, suppressed while focus is in an input, textarea,
   select, or contenteditable.
+- App shell is the shadcn **dashboard-01 block**: `app/layout.tsx` wraps every
+  page in `SidebarProvider` + `AppSidebar` + `SidebarInset` + `SiteHeader`
+  (inside `TooltipProvider` — sidebar tooltips require it). Nav items live in
+  `components/app-sidebar.tsx`; `components/site-header.tsx` is sticky and shows
+  the page title plus the current source/target store chips (right side, linking
+  to /config). Pages render content only — no per-page headers.
+- `hooks/use-mounted.ts` — hydration-safe "client mounted" flag built on
+  `useSyncExternalStore` (not effect+setState). Pages gate localStorage-derived UI
+  on it to avoid SSR mismatches. `hooks/use-mobile.ts` (from the block) follows
+  the same pattern.
+- `lib/list-cache.ts` — session in-memory list cache keyed by source store: the
+  metaobject/metafield panels render cached data instantly on re-entry and
+  silently revalidate (stale-while-revalidate). Deliberately not persisted to
+  localStorage — entry payloads are large and stale disk data is worse than a
+  reload fetch. Panel effects must not call setState synchronously (lint): the
+  auto-load wraps its work in `Promise.resolve().then(...)`.
 - `lib/utils.ts` — re-exports `cn` from the `cn` package.
 - Theme tokens are CSS variables in oklch, defined in `app/globals.css`.
 - A `.mcp.json` registers the shadcn MCP server; prefer its registry tools over

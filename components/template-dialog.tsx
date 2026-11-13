@@ -3,10 +3,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import {
-  Dialog,
-  DialogContent,
-} from "@/components/ui/dialog"
+import { Dialog, DialogContent } from "@/components/ui/dialog"
 
 const TEMPLATE_NAMES: Record<string, string> = {
   "templates/index.json": "首页",
@@ -115,7 +112,7 @@ export function TemplateDialog({
         setLoading(false)
       }
     },
-    [storeDomain, accessToken],
+    [storeDomain, accessToken]
   )
 
   /** 拉取模板内容并填入 */
@@ -146,7 +143,7 @@ export function TemplateDialog({
         setLoading(false)
       }
     },
-    [storeDomain, accessToken, onOpenChange],
+    [storeDomain, accessToken, onOpenChange]
   )
 
   /** live (main) 主题排最前 */
@@ -157,7 +154,7 @@ export function TemplateDialog({
         if (a.role !== "main" && b.role === "main") return 1
         return 0
       }),
-    [themes],
+    [themes]
   )
 
   /** 打开时：有在线主题直接跳到模板列表 */
@@ -318,44 +315,46 @@ export function TemplateDialog({
                 <p className="py-8 text-center text-xs text-muted-foreground">
                   未找到模板
                 </p>
-              ) : (() => {
-                const q = search.toLowerCase()
-                const filtered = q
-                  ? templateKeys.filter(
-                      (k) =>
-                        k.toLowerCase().includes(q) ||
-                        templateLabel(k).toLowerCase().includes(q),
-                    )
-                  : templateKeys
+              ) : (
+                (() => {
+                  const q = search.toLowerCase()
+                  const filtered = q
+                    ? templateKeys.filter(
+                        (k) =>
+                          k.toLowerCase().includes(q) ||
+                          templateLabel(k).toLowerCase().includes(q)
+                      )
+                    : templateKeys
 
-                return filtered.length === 0 ? (
-                  <p className="py-8 text-center text-xs text-muted-foreground">
-                    无匹配模板
-                  </p>
-                ) : (
-                  <div className="max-h-60 space-y-1 overflow-x-hidden overflow-y-auto">
-                    {filtered.map((key) => (
-                      <button
-                        key={key}
-                        type="button"
-                        className={`flex w-full max-w-full flex-col gap-1 overflow-hidden rounded-lg border px-3 py-2 text-left transition-colors ${
-                          selectedKey === key
-                            ? "border-primary bg-primary/5"
-                            : "border-transparent hover:bg-muted/50"
-                        }`}
-                        onClick={() => setSelectedKey(key)}
-                      >
-                        <span className="min-w-0 max-w-full truncate text-sm">
-                          {templateLabel(key)}
-                        </span>
-                        <span className="hidden min-w-0 max-w-full shrink truncate font-mono text-[10px] text-muted-foreground/50 sm:block">
-                          {key}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )
-              })()}
+                  return filtered.length === 0 ? (
+                    <p className="py-8 text-center text-xs text-muted-foreground">
+                      无匹配模板
+                    </p>
+                  ) : (
+                    <div className="max-h-60 space-y-1 overflow-x-hidden overflow-y-auto">
+                      {filtered.map((key) => (
+                        <button
+                          key={key}
+                          type="button"
+                          className={`flex w-full max-w-full flex-col gap-1 overflow-hidden rounded-lg border px-3 py-2 text-left transition-colors ${
+                            selectedKey === key
+                              ? "border-primary bg-primary/5"
+                              : "border-transparent hover:bg-muted/50"
+                          }`}
+                          onClick={() => setSelectedKey(key)}
+                        >
+                          <span className="max-w-full min-w-0 truncate text-sm">
+                            {templateLabel(key)}
+                          </span>
+                          <span className="hidden max-w-full min-w-0 shrink truncate font-mono text-[10px] text-muted-foreground/50 sm:block">
+                            {key}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )
+                })()
+              )}
             </div>
           )}
 

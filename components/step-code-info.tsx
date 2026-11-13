@@ -32,7 +32,7 @@ export function StepCodeInfo({
       <CardContent className="space-y-3 px-6 py-4">
         <div className="flex items-center gap-3">
           <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-xs font-bold text-background">
-            3
+            2
           </span>
           <span className="text-sm font-medium">
             {resolving && !templateJson ? "正在加载模板..." : "模板代码"}
