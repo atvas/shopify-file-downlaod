@@ -1,5 +1,21 @@
 import { NextResponse } from "next/server"
-import { sanitizeDomain, SHOPIFY_API_VERSION } from "@/lib/shopify"
+import { request as httpsRequest } from "node:https"
+import {
+  mapWithConcurrency,
+  sanitizeDomain,
+  SHOPIFY_API_VERSION,
+  targetFileExists,
+} from "@/lib/shopify"
+import { readResponseBody } from "@/lib/stream"
+
+type PushFileType = "image" | "video"
+type PushPhase = "checking" | "download" | "upload" | "finalizing"
+type FileProgressFn = (
+  phase: PushPhase,
+  received: number,
+  total: number
+) => void
+type ByteProgressFn = (received: number, total: number) => void
 
 interface StagedUploadTarget {
   url: string
@@ -7,119 +23,79 @@ interface StagedUploadTarget {
   parameters: { name: string; value: string }[]
 }
 
-interface PushImage {
+interface PushFile {
+  /** 客户端生成的唯一标识，进度事件原样带回；缺省用数组下标 */
+  id?: string
   url: string
   name: string
+  type: PushFileType
 }
+
+/**
+ * 同时处理的文件数。
+ *
+ * 单个文件内部是「下载 → 上传」串行，两个文件并行时，一个在下传、
+ * 另一个在上传，正好把两段等待重叠起来。不再往上加是因为每个文件
+ * 都完整读进内存，3 个 500MB 的视频会同时占 1.5GB。
+ */
+const PUSH_CONCURRENCY = 2
 
 interface RequestBody {
   targetDomain: string
   targetToken: string
-  images: PushImage[]
+  files?: PushFile[]
+  /** 旧版客户端只传 images，保留兼容 */
+  images?: PushFile[]
 }
 
-/**
- * 在目标站点按文件名搜索，判断文件是否已存在。
- * 用 GraphQL files 查询，匹配 alt 或 filename。
- */
-async function fileExists(
-  domain: string,
-  token: string,
-  fileName: string
-): Promise<boolean> {
-  // 搜索策略：先用精确文件名，再去掉扩展名搜一次
-  const stem = fileName.replace(/\.[^.]+$/, "")
-  const queries = [
-    `filename:${JSON.stringify(fileName)}`,
-    `filename:${JSON.stringify(stem)}`,
-  ]
-
-  for (const query of queries) {
-    const gql = `{
-      files(first:5, query:${JSON.stringify(query)}) {
-        edges { node { alt ... on MediaImage { image { url } } } }
-      }
-    }`
-
-    const res = await fetch(
-      `https://${domain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
-      {
-        method: "POST",
-        headers: {
-          "X-Shopify-Access-Token": token,
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify({ query: gql }),
-      }
-    )
-
-    if (!res.ok) continue
-    const data = await res.json()
-    const edges = data?.data?.files?.edges ?? []
-
-    for (const edge of edges) {
-      const node = edge.node
-      // alt 通常存的就是原始文件名
-      const alt: string = node.alt ?? ""
-      if (
-        alt.toLowerCase() === fileName.toLowerCase() ||
-        alt.toLowerCase() === stem.toLowerCase()
-      ) {
-        return true
-      }
-      // MediaImage 的 url 末尾也包含文件名
-      const imgUrl: string = node.image?.url ?? ""
-      if (imgUrl) {
-        const urlName = imgUrl.split("/").pop()?.split("?")[0] ?? ""
-        if (
-          urlName.toLowerCase() === fileName.toLowerCase() ||
-          urlName.toLowerCase() === stem.toLowerCase()
-        ) {
-          return true
-        }
-      }
-    }
-  }
-
-  // 兜底：REST files 列表搜索
-  try {
-    const restRes = await fetch(
-      `https://${domain}/admin/api/${SHOPIFY_API_VERSION}/files.json?limit=250`,
-      {
-        headers: {
-          "X-Shopify-Access-Token": token,
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-      }
-    )
-    if (restRes.ok) {
-      const restData = await restRes.json()
-      const files: { alt?: string; filename?: string }[] = restData.files ?? []
-      const lowerName = fileName.toLowerCase()
-      const lowerStem = stem.toLowerCase()
-      for (const f of files) {
-        const fAlt = (f.alt ?? "").toLowerCase()
-        const fFn = (f.filename ?? "").toLowerCase()
-        if (fAlt === lowerName || fAlt === lowerStem) return true
-        if (fFn === lowerName || fFn === lowerStem) return true
-      }
-    }
-  } catch {
-    // REST 搜索失败不影响结论
-  }
-
-  return false
+const MIME_BY_EXT: Record<string, string> = {
+  mp4: "video/mp4",
+  webm: "video/webm",
+  mov: "video/quicktime",
+  avi: "video/x-msvideo",
+  m4v: "video/x-m4v",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  svg: "image/svg+xml",
+  gif: "image/gif",
+  webp: "image/webp",
+  avif: "image/avif",
+  bmp: "image/bmp",
+  tiff: "image/tiff",
+  tif: "image/tiff",
 }
 
-/** 创建 staged upload，获取上传 URL */
+function guessMimeType(fileName: string, type: PushFileType): string {
+  const ext = fileName.split(".").pop()?.toLowerCase() ?? ""
+  return MIME_BY_EXT[ext] ?? (type === "video" ? "video/mp4" : "image/jpeg")
+}
+
+/** 节流进度事件：每 250ms 最多一条，起点与 100% 必须送达 */
+function throttleProgress(onProgress: ByteProgressFn): ByteProgressFn {
+  let lastAt = 0
+  let lastReceived = -1
+
+  return (received, total) => {
+    const now = Date.now()
+    const done = total > 0 && received >= total
+    if (!done && received === lastReceived) return
+    if (!done && now - lastAt < 250) return
+
+    lastAt = now
+    lastReceived = received
+    onProgress(received, total)
+  }
+}
+
+/** 创建 staged upload，获取上传 URL。图片与视频只是 resource 不同。 */
 async function createStagedUpload(
   domain: string,
   token: string,
   fileName: string,
   mimeType: string,
-  fileSize: number
+  fileSize: number,
+  resource: "IMAGE" | "VIDEO"
 ): Promise<StagedUploadTarget> {
   const mutation = `mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
     stagedUploadsCreate(input: $input) {
@@ -146,7 +122,8 @@ async function createStagedUpload(
         variables: {
           input: [
             {
-              resource: "IMAGE",
+              // 视频必须用 VIDEO；图片用 IMAGE
+              resource,
               filename: fileName,
               mimeType,
               fileSize: fileSize.toString(),
@@ -177,48 +154,136 @@ async function createStagedUpload(
   return targets[0]
 }
 
-/** 通过 staged upload 直接上传图片二进制数据 */
-async function uploadViaStagedUpload(
+/** multipart 头里的值不能带换行和引号，否则会破坏边界解析 */
+function escapeMultipartValue(value: string): string {
+  return value.replace(/[\r\n"]/g, "_")
+}
+
+/**
+ * 把文件以 multipart/form-data 流式 POST 到 staged URL。
+ *
+ * 这里不用 `fetch` + `FormData`：那样只有整体完成才返回，大视频推送时
+ * 客户端全程看不到任何进展。改成手写 multipart + `https.request`，
+ * Content-Length 精确可知，每写完一个分片就能上报一次字节进度。
+ */
+async function uploadMultipart(
+  uploadUrl: string,
+  parameters: { name: string; value: string }[],
+  fileName: string,
+  mimeType: string,
+  fileBuffer: Buffer,
+  onProgress: ByteProgressFn
+): Promise<void> {
+  const boundary = `----ShopifyPush${Date.now().toString(16)}${Math.random()
+    .toString(16)
+    .slice(2)}`
+
+  const fields = parameters
+    .map(
+      (param) =>
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="${escapeMultipartValue(param.name)}"\r\n\r\n` +
+        `${param.value}\r\n`
+    )
+    .join("")
+  const fileHeader =
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="file"; filename="${escapeMultipartValue(fileName)}"\r\n` +
+    `Content-Type: ${mimeType}\r\n\r\n`
+  const preamble = Buffer.from(fields + fileHeader, "utf8")
+  const epilogue = Buffer.from(`\r\n--${boundary}--\r\n`, "utf8")
+  const totalLength =
+    preamble.byteLength + fileBuffer.byteLength + epilogue.byteLength
+
+  const report = throttleProgress(onProgress)
+  onProgress(0, fileBuffer.byteLength)
+
+  await new Promise<void>((resolve, reject) => {
+    const req = httpsRequest(
+      uploadUrl,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": `multipart/form-data; boundary=${boundary}`,
+          "Content-Length": totalLength.toString(),
+        },
+      },
+      (res) => {
+        let body = ""
+        res.setEncoding("utf8")
+        res.on("data", (chunk) => {
+          if (body.length < 4096) body += chunk
+        })
+        res.on("end", () => {
+          const status = res.statusCode ?? 0
+          if (status >= 200 && status < 300) {
+            resolve()
+          } else {
+            reject(
+              new Error(
+                `上传到 staged URL 失败 (${status})${
+                  body ? `: ${body.slice(0, 300)}` : ""
+                }`
+              )
+            )
+          }
+        })
+      }
+    )
+
+    req.setTimeout(60_000, () => {
+      req.destroy(new Error("上传到 staged URL 超时"))
+    })
+    req.on("error", reject)
+
+    const writeChunk = (chunk: Buffer) =>
+      new Promise<void>((res, rej) => {
+        req.write(chunk, (err) => (err ? rej(err) : res()))
+      })
+
+    void (async () => {
+      try {
+        await writeChunk(preamble)
+
+        const CHUNK_SIZE = 512 * 1024
+        let sent = 0
+        for (
+          let offset = 0;
+          offset < fileBuffer.byteLength;
+          offset += CHUNK_SIZE
+        ) {
+          const chunk = fileBuffer.subarray(offset, offset + CHUNK_SIZE)
+          await writeChunk(chunk)
+          sent += chunk.byteLength
+          report(sent, fileBuffer.byteLength)
+        }
+
+        await writeChunk(epilogue)
+        req.end()
+      } catch (err) {
+        req.destroy()
+        reject(err)
+      }
+    })()
+  })
+}
+
+/** 创建目标站点的文件记录（图片 / 视频共用） */
+async function createFileRecord(
   domain: string,
   token: string,
-  imageBuffer: ArrayBuffer,
+  resourceUrl: string,
   fileName: string,
-  mimeType: string
+  resource: "IMAGE" | "VIDEO"
 ): Promise<void> {
-  // 1. 创建 staged upload
-  const staged = await createStagedUpload(
-    domain,
-    token,
-    fileName,
-    mimeType,
-    imageBuffer.byteLength
-  )
-
-  // 2. 上传到 staged URL
-  const formData = new FormData()
-  for (const param of staged.parameters) {
-    formData.append(param.name, param.value)
-  }
-  formData.append("file", new Blob([imageBuffer], { type: mimeType }), fileName)
-
-  const uploadRes = await fetch(staged.url, {
-    method: "POST",
-    body: formData,
-  })
-
-  if (!uploadRes.ok) {
-    throw new Error(`上传到 staged URL 失败 (${uploadRes.status})`)
-  }
-
-  // 3. 通过 files API 创建文件记录
-  const createMutation = `mutation fileCreate($files: [FileCreateInput!]!) {
+  const mutation = `mutation fileCreate($files: [FileCreateInput!]!) {
     fileCreate(files: $files) {
       files { id alt }
       userErrors { field message }
     }
   }`
 
-  const createRes = await fetch(
+  const res = await fetch(
     `https://${domain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
     {
       method: "POST",
@@ -228,13 +293,13 @@ async function uploadViaStagedUpload(
         Accept: "application/json",
       },
       body: JSON.stringify({
-        query: createMutation,
+        query: mutation,
         variables: {
           files: [
             {
               alt: fileName,
-              contentType: "IMAGE",
-              originalSource: staged.resourceUrl,
+              contentType: resource,
+              originalSource: resourceUrl,
             },
           ],
         },
@@ -242,79 +307,164 @@ async function uploadViaStagedUpload(
     }
   )
 
-  if (!createRes.ok) {
-    throw new Error(`创建文件记录失败 (${createRes.status})`)
-  }
-
-  const createData = await createRes.json()
-  const createErrors = createData?.data?.fileCreate?.userErrors
-
-  if (createErrors?.length > 0) {
-    throw new Error(`创建文件记录错误: ${createErrors[0].message}`)
-  }
-}
-
-/** 下载图片到服务端 */
-async function downloadImage(
-  imageUrl: string
-): Promise<{ buffer: ArrayBuffer; mimeType: string }> {
-  const res = await fetch(imageUrl)
   if (!res.ok) {
-    throw new Error(`下载图片失败 (${res.status}): ${imageUrl}`)
+    throw new Error(`创建文件记录失败 (${res.status})`)
   }
 
-  const contentType = res.headers.get("content-type") || "image/jpeg"
-  const buffer = await res.arrayBuffer()
+  const data = await res.json()
+  const errors = data?.data?.fileCreate?.userErrors
 
-  return { buffer, mimeType: contentType }
+  if (errors?.length > 0) {
+    throw new Error(`创建文件记录错误: ${errors[0].message}`)
+  }
 }
 
-/** 上传图片到 Shopify（优先 src 模式，失败则直接上传） */
+/** 通过 staged upload 上传文件二进制数据（视频唯一可行的上传路径） */
+async function uploadViaStagedUpload(
+  domain: string,
+  token: string,
+  buffer: ArrayBuffer,
+  fileName: string,
+  mimeType: string,
+  type: PushFileType,
+  onProgress: FileProgressFn
+): Promise<void> {
+  const resource = type === "video" ? "VIDEO" : "IMAGE"
+  const fileBuffer = Buffer.from(buffer)
+
+  onProgress("upload", 0, fileBuffer.byteLength)
+
+  // 1. 创建 staged upload
+  const staged = await createStagedUpload(
+    domain,
+    token,
+    fileName,
+    mimeType,
+    fileBuffer.byteLength,
+    resource
+  )
+
+  // 2. 上传到 staged URL（带字节进度）
+  await uploadMultipart(
+    staged.url,
+    staged.parameters,
+    fileName,
+    mimeType,
+    fileBuffer,
+    (received, total) => onProgress("upload", received, total)
+  )
+
+  // 3. 创建文件记录
+  onProgress("finalizing", 0, 0)
+  await createFileRecord(domain, token, staged.resourceUrl, fileName, resource)
+}
+
+/** 把源文件下载到服务端（源 CDN 是公开读取，不带 token） */
+async function downloadFile(
+  fileUrl: string,
+  fileName: string,
+  type: PushFileType,
+  onProgress: ByteProgressFn
+): Promise<{ buffer: ArrayBuffer; mimeType: string }> {
+  const res = await fetch(fileUrl)
+  if (!res.ok) {
+    throw new Error(`下载文件失败 (${res.status}): ${fileUrl}`)
+  }
+
+  const headerType = (res.headers.get("content-type") ?? "")
+    .split(";")[0]
+    .trim()
+    .toLowerCase()
+
+  // 状态码 200 也可能是 CDN 的 HTML 错误页，别把它当素材传上去
+  if (headerType.includes("text/html")) {
+    throw new Error(`源地址返回的是 HTML 页面而不是文件: ${fileUrl}`)
+  }
+
+  // 共享的流式读取：按 Content-Length 预分配 + 上报字节进度
+  const buffer = await readResponseBody(res, throttleProgress(onProgress))
+
+  const mimeType =
+    headerType &&
+    !headerType.includes("octet-stream") &&
+    !headerType.startsWith("text/")
+      ? headerType
+      : guessMimeType(fileName, type)
+
+  return { buffer, mimeType }
+}
+
+/** 上传单个文件到目标站点（图片优先 src 模式，视频直接 staged upload） */
 async function uploadFile(
   domain: string,
   token: string,
-  imageUrl: string,
-  fileName: string
-): Promise<"src" | "direct"> {
-  // 策略 1: src 模式（适用于 Shopify 内部 CDN URL）
-  const srcUrl = `https://${domain}/admin/api/${SHOPIFY_API_VERSION}/files.json`
-
-  const srcRes = await fetch(srcUrl, {
-    method: "POST",
-    headers: {
-      "X-Shopify-Access-Token": token,
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify({
-      file: {
-        src: imageUrl,
-        alt: fileName,
-      },
-    }),
-  })
-
-  if (srcRes.ok) return "src"
-
-  // src 模式失败，检查错误
+  file: PushFile,
+  onProgress: FileProgressFn
+): Promise<"src" | "staged"> {
+  let srcStatus = 0
   let srcError = ""
-  try {
-    const json = await srcRes.json()
-    srcError = JSON.stringify(json.errors || json.error || json)
-  } catch {
-    srcError = await srcRes.text().catch(() => "")
+
+  // 策略 1: src 模式（仅图片 —— REST files 接口不接收视频）
+  if (file.type === "image") {
+    const srcRes = await fetch(
+      `https://${domain}/admin/api/${SHOPIFY_API_VERSION}/files.json`,
+      {
+        method: "POST",
+        headers: {
+          "X-Shopify-Access-Token": token,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          file: {
+            src: file.url,
+            alt: file.name,
+          },
+        }),
+      }
+    )
+
+    if (srcRes.ok) return "src"
+
+    srcStatus = srcRes.status
+    try {
+      const json = await srcRes.json()
+      srcError = JSON.stringify(json.errors || json.error || json)
+    } catch {
+      srcError = await srcRes.text().catch(() => "")
+    }
   }
 
-  // 策略 2: 下载图片后直接上传（适用于外链图片）
+  // 策略 2: 下载后直接上传（图片 src 模式失败时兜底，视频唯一路径）
   try {
-    const { buffer, mimeType } = await downloadImage(imageUrl)
-    await uploadViaStagedUpload(domain, token, buffer, fileName, mimeType)
-    return "direct"
-  } catch (directErr) {
+    const { buffer, mimeType } = await downloadFile(
+      file.url,
+      file.name,
+      file.type,
+      (received, total) => onProgress("download", received, total)
+    )
+    await uploadViaStagedUpload(
+      domain,
+      token,
+      buffer,
+      file.name,
+      mimeType,
+      file.type,
+      onProgress
+    )
+    return "staged"
+  } catch (stagedErr) {
+    const stagedMessage =
+      stagedErr instanceof Error ? stagedErr.message : "未知错误"
+
+    if (file.type === "video") {
+      throw new Error(`上传视频失败: ${stagedMessage}`)
+    }
+
     throw new Error(
       `上传失败:\n` +
-        `- src 模式 (${srcRes.status}): ${srcError}\n` +
-        `- 直接上传: ${directErr instanceof Error ? directErr.message : "未知错误"}`
+        `- src 模式 (${srcStatus}): ${srcError}\n` +
+        `- 直接上传: ${stagedMessage}`
     )
   }
 }
@@ -322,54 +472,115 @@ async function uploadFile(
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as RequestBody
-    const { targetDomain, targetToken, images } = body
+    const { targetDomain, targetToken, files: rawFiles, images } = body
 
     if (!targetDomain || !targetToken) {
       return NextResponse.json({ error: "缺少目标站点凭证" }, { status: 400 })
     }
-    if (!images || images.length === 0) {
-      return NextResponse.json({ error: "没有要推送的图片" }, { status: 400 })
+
+    const items: PushFile[] = (rawFiles ?? images ?? [])
+      .filter((f) => f?.url)
+      .map((f, index) => ({
+        id: f.id ?? String(index),
+        url: f.url,
+        name: f.name || f.url.split("/").pop()?.split("?")[0] || "file",
+        type: f.type === "video" ? "video" : "image",
+      }))
+
+    if (items.length === 0) {
+      return NextResponse.json({ error: "没有要推送的文件" }, { status: 400 })
     }
 
     const domain = sanitizeDomain(targetDomain)
 
-    // NDJSON 流式响应
+    // NDJSON 流式响应：进度事件和最终结果共用一条流
     const stream = new ReadableStream({
       async start(controller) {
         const encoder = new TextEncoder()
+        let clientGone = false
+
         const write = (obj: Record<string, unknown>) => {
-          controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"))
-        }
-
-        for (const img of images) {
+          if (clientGone) return
           try {
-            const exists = await fileExists(domain, targetToken, img.name)
-            if (exists) {
-              write({ name: img.name, status: "skipped" })
-              continue
-            }
-
-            const method = await uploadFile(
-              domain,
-              targetToken,
-              img.url,
-              img.name
-            )
-            write({
-              name: img.name,
-              status: "uploaded",
-              method, // "src" 或 "direct"
-            })
-          } catch (err) {
-            write({
-              name: img.name,
-              status: "error",
-              error: err instanceof Error ? err.message : "未知错误",
-            })
+            controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"))
+          } catch {
+            // 客户端已断开（取消推送），别再往关闭的流里写
+            clientGone = true
           }
         }
 
-        controller.close()
+        await mapWithConcurrency(
+          items,
+          PUSH_CONCURRENCY,
+          async (file): Promise<void> => {
+            if (clientGone || request.signal.aborted) return
+
+            try {
+              write({
+                id: file.id,
+                name: file.name,
+                type: file.type,
+                status: "progress",
+                phase: "checking",
+                received: 0,
+                total: 0,
+              })
+
+              const exists = await targetFileExists(
+                domain,
+                targetToken,
+                file.name
+              )
+              if (exists) {
+                write({
+                  id: file.id,
+                  name: file.name,
+                  type: file.type,
+                  status: "skipped",
+                })
+                return
+              }
+
+              const method = await uploadFile(
+                domain,
+                targetToken,
+                file,
+                (phase, received, total) => {
+                  write({
+                    id: file.id,
+                    name: file.name,
+                    type: file.type,
+                    status: "progress",
+                    phase,
+                    received,
+                    total,
+                  })
+                }
+              )
+              write({
+                id: file.id,
+                name: file.name,
+                type: file.type,
+                status: "uploaded",
+                method, // "src" 或 "staged"
+              })
+            } catch (err) {
+              write({
+                id: file.id,
+                name: file.name,
+                type: file.type,
+                status: "error",
+                error: err instanceof Error ? err.message : "未知错误",
+              })
+            }
+          }
+        )
+
+        try {
+          controller.close()
+        } catch {
+          // 客户端已断开时流可能已经关闭
+        }
       },
     })
 

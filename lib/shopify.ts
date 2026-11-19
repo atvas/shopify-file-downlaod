@@ -6,6 +6,10 @@
  * 只保留唯一一份实现。
  */
 
+import { mapWithConcurrency } from "@/lib/concurrency"
+
+export { mapWithConcurrency } from "@/lib/concurrency"
+
 export const SHOPIFY_API_VERSION = "2024-01"
 
 export interface VideoSource {
@@ -25,7 +29,11 @@ export interface FileNode {
   /** 仅 Video 上有；非 READY 时 sources / originalSource 都是空的 */
   status?: string | null
   /** 仅 MediaImage 上有 */
-  image?: { url: string | null } | null
+  image?: {
+    url: string | null
+    width?: number | null
+    height?: number | null
+  } | null
   /** 仅 GenericFile 上有（.pdf/.zip 这类） */
   url?: string | null
   originalSource?: VideoSource | null
@@ -36,11 +44,19 @@ export interface ResolvedFile {
   url: string
   /** 原始文件名，用于给下载的文件命名 */
   filename: string | null
+  /** 字节大小（视频转码档 / REST 文件有，图片 GraphQL 没有） */
+  size?: number | null
+  /** 分辨率，能拿到时展示在卡片上 */
+  width?: number | null
+  height?: number | null
 }
 
 export interface ResolveResult {
   url: string | null
   filename: string | null
+  size?: number | null
+  width?: number | null
+  height?: number | null
   errors: string[]
 }
 
@@ -61,6 +77,8 @@ const FILE_NODE_FIELDS = `
     ... on MediaImage {
       image {
         url
+        width
+        height
       }
     }
     ... on Video {
@@ -126,7 +144,7 @@ function isPlaylist(source: VideoSource): boolean {
  * 自动生成的 m3u8（HLS 播放列表）—— 那是个几 KB 的文本清单，直接下下来
  * 既播不了也不是视频。所以这里必须把它滤掉，再按分辨率取最高档。
  */
-export function pickBestVideoSource(node: FileNode): string | null {
+export function pickBestVideoSource(node: FileNode): VideoSource | null {
   const usable = (node.sources ?? []).filter(
     (source) => !!source.url && !isPlaylist(source)
   )
@@ -138,18 +156,52 @@ export function pickBestVideoSource(node: FileNode): string | null {
       if (aSize !== bSize) return bSize - aSize
       return (b.fileSize ?? 0) - (a.fileSize ?? 0)
     })[0]
-    if (best.url) return best.url
+    if (best?.url) return best
   }
 
   // 没有可用的转码档时退回原始上传文件
-  return node.originalSource?.url ?? null
+  return node.originalSource?.url ? node.originalSource : null
+}
+
+/**
+ * 节点的下载地址 + 可展示的元信息。
+ *
+ * 视频的大小 / 分辨率来自选中的转码档；图片的分辨率来自
+ * MediaImage.image（图片没有 fileSize，所以 size 为空）。
+ */
+export function nodeFileInfo(node: FileNode): ResolvedFile | null {
+  if (node.image?.url) {
+    return {
+      url: normalizeUrl(node.image.url),
+      filename: node.filename ?? null,
+      size: null,
+      width: node.image.width ?? null,
+      height: node.image.height ?? null,
+    }
+  }
+
+  if (node.url) {
+    return {
+      url: normalizeUrl(node.url),
+      filename: node.filename ?? null,
+    }
+  }
+
+  const best = pickBestVideoSource(node)
+  if (!best?.url) return null
+
+  return {
+    url: normalizeUrl(best.url),
+    filename: node.filename ?? null,
+    size: best.fileSize ?? null,
+    width: best.width ?? null,
+    height: best.height ?? null,
+  }
 }
 
 /** 该节点可以直接下载的 URL：视频走最优转码档，图片走 image，其他走 url */
 export function nodeDownloadUrl(node: FileNode): string | null {
-  if (node.image?.url) return node.image.url
-  if (node.url) return node.url
-  return pickBestVideoSource(node)
+  return nodeFileInfo(node)?.url ?? null
 }
 
 /** decodeURIComponent 遇到残缺的 % 转义会抛，兜住 */
@@ -291,35 +343,6 @@ function chunkArray<T>(items: T[], size: number): T[][] {
   return chunks
 }
 
-/**
- * 限制并发数。
- *
- * 一个模板里可能有几十个素材，每个还要试 3 个搜索词 —— 不设上限就是几百个
- * 请求同时打过去，必然触发 Shopify 的 leaky bucket 限流，表现为「部分视频
- * 时好时坏」这种最难查的症状。
- */
-export async function mapWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>
-): Promise<R[]> {
-  const results: R[] = new Array(items.length)
-  let cursor = 0
-
-  const workers = Array.from(
-    { length: Math.min(limit, items.length) },
-    async () => {
-      while (cursor < items.length) {
-        const index = cursor++
-        results[index] = await fn(items[index])
-      }
-    }
-  )
-
-  await Promise.all(workers)
-  return results
-}
-
 /** 顺序单查时的并发数。只用于单个文件的完整解析。 */
 const BATCH_CONCURRENCY = 6
 
@@ -382,13 +405,9 @@ export async function batchResolve(
     for (const node of nodes) {
       if (!nodeMatches(node, name)) continue
 
-      const url = nodeDownloadUrl(node)
-      if (!url) continue
+      const file = nodeFileInfo(node)
+      if (!file) continue
 
-      const file = {
-        url: normalizeUrl(url),
-        filename: node.filename ?? null,
-      }
       resolved.set(name, file)
       onResolved?.(name, file)
       return
@@ -524,7 +543,13 @@ async function tryRestLookup(
         url.toLowerCase().includes(target)
       ) {
         return {
-          file: { url: normalizeUrl(url), filename: file.filename ?? null },
+          file: {
+            url: normalizeUrl(url),
+            filename: file.filename ?? null,
+            size: typeof file.size === "number" ? file.size : null,
+            width: typeof file.width === "number" ? file.width : null,
+            height: typeof file.height === "number" ? file.height : null,
+          },
         }
       }
     }
@@ -559,12 +584,119 @@ async function tryCdnProbe(
       const contentType = response.headers.get("content-type") ?? ""
       if (contentType.includes("text/html")) continue
 
-      return { url: candidate, filename: null }
+      const size = Number(response.headers.get("content-length") ?? 0) || null
+
+      return { url: candidate, filename: null, size }
     } catch {
       // 试下一个
     }
   }
   return null
+}
+
+/**
+ * 在目标站点按文件名判断文件是否已存在（推送前去重 / 目标检查共用）。
+ *
+ * 图片可以比对 CDN URL 末段（图片 URL 保留原文件名）；视频不行 ——
+ * 视频 URL 是 /videos/c/vp/<hash>/<hash>.HD-1080p....mp4，文件名位置是哈希，
+ * 只能比对 `Video.filename`。也正因如此 `filename` 必须写在 `... on Video`
+ * 里：File 接口没有这个字段，写到接口作用域会让整条查询被 GraphQL 拒绝，
+ * 存在性判断就永远失败、每次都重复上传。
+ */
+export async function targetFileExists(
+  domain: string,
+  token: string,
+  fileName: string
+): Promise<boolean> {
+  // 搜索策略：先用精确文件名，再去掉扩展名搜一次
+  const stem = fileName.replace(/\.[^.]+$/, "")
+  const names = new Set([fileName.toLowerCase(), stem.toLowerCase()])
+  const queries = [
+    `filename:${JSON.stringify(fileName)}`,
+    `filename:${JSON.stringify(stem)}`,
+  ]
+
+  for (const query of queries) {
+    const gql = `{
+      files(first:10, query:${JSON.stringify(query)}) {
+        edges {
+          node {
+            alt
+            ... on MediaImage { image { url } }
+            ... on Video { filename }
+          }
+        }
+      }
+    }`
+
+    const res = await fetch(
+      `https://${domain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
+      {
+        method: "POST",
+        headers: {
+          "X-Shopify-Access-Token": token,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({ query: gql }),
+      }
+    )
+
+    if (!res.ok) continue
+    const data = await res.json()
+    const edges = data?.data?.files?.edges ?? []
+
+    for (const edge of edges) {
+      const node = edge.node
+
+      // alt 通常存的就是原始文件名
+      const alt: string = node.alt ?? ""
+      if (names.has(alt.toLowerCase())) return true
+
+      // 视频的原始文件名（图片/其他类型没有这个字段）
+      const videoName: string = node.filename ?? ""
+      if (names.has(videoName.toLowerCase())) return true
+
+      // MediaImage 的 url 末尾也包含文件名；CDN 会转义空格，先解码
+      const imgUrl: string = node.image?.url ?? ""
+      if (imgUrl) {
+        const urlName = safeDecode(
+          imgUrl.split("/").pop()?.split("?")[0] ?? ""
+        ).toLowerCase()
+        if (names.has(urlName)) return true
+      }
+    }
+  }
+
+  // 兜底：REST files 列表搜索
+  try {
+    const restRes = await fetch(
+      `https://${domain}/admin/api/${SHOPIFY_API_VERSION}/files.json?limit=250`,
+      {
+        headers: {
+          "X-Shopify-Access-Token": token,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+      }
+    )
+    if (restRes.ok) {
+      const restData = await restRes.json()
+      const files: { alt?: string; filename?: string }[] = restData.files ?? []
+      const lowerName = fileName.toLowerCase()
+      const lowerStem = stem.toLowerCase()
+      for (const f of files) {
+        const fAlt = (f.alt ?? "").toLowerCase()
+        const fFn = (f.filename ?? "").toLowerCase()
+        if (fAlt === lowerName || fAlt === lowerStem) return true
+        if (fFn === lowerName || fFn === lowerStem) return true
+      }
+    }
+  } catch {
+    // REST 搜索失败不影响结论
+  }
+
+  return false
 }
 
 export interface ResolveOptions {
@@ -618,14 +750,8 @@ export async function resolveShopifyFileUrl(
       for (const node of result.nodes) {
         if (!nodeMatches(node, fileName)) continue
 
-        const url = nodeDownloadUrl(node)
-        if (url) {
-          return {
-            url: normalizeUrl(url),
-            filename: node.filename ?? null,
-            errors: [],
-          }
-        }
+        const file = nodeFileInfo(node)
+        if (file) return { ...file, errors: [] }
 
         // 匹配上了但拿不到地址 —— 视频多半还在转码
         if (node.status && node.status !== "READY") {
@@ -752,7 +878,13 @@ export async function resolveShopifyPaths(
       report({
         entry,
         file: result.url
-          ? { url: result.url, filename: result.filename }
+          ? {
+              url: result.url,
+              filename: result.filename,
+              size: result.size ?? null,
+              width: result.width ?? null,
+              height: result.height ?? null,
+            }
           : null,
         error: result.url ? undefined : result.errors[0],
       })

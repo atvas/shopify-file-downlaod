@@ -4,6 +4,11 @@ export interface MediaFile {
   type: "video" | "image"
   selected: boolean
   resolvedUrl?: string | null
+  /** 字节大小，拿不到时为空 */
+  size?: number | null
+  /** 分辨率，图片来自 MediaImage，视频来自选中的转码档 */
+  width?: number | null
+  height?: number | null
 }
 
 /** /api/shopify-resolve 按 NDJSON 逐行推送的条目 */
@@ -11,6 +16,9 @@ export interface ResolveResult {
   original: string
   resolved: string | null
   filename: string | null
+  size?: number | null
+  width?: number | null
+  height?: number | null
   error?: string
 }
 

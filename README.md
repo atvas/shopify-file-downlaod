@@ -27,35 +27,48 @@ Shopify 主题模板素材批量下载工具。从 Shopify 主题模板中提取
 ```
 app/
   page.tsx                        # 主页面（全局状态 + 布局组装）
+  config/page.tsx                 # 店铺配置页
+  metafields/page.tsx             # 产品元字段迁移页面
   metaobjects/page.tsx            # 元对象迁移页面（独立全屏路由）
   api/
     shopify-resolve/route.ts      # shopify:// URL 解析（NDJSON 流式响应）
     shopify-templates/route.ts    # 主题/模板列表 & 内容获取
     shopify-videos/route.ts       # 文件下载（单文件 / ZIP）
-    shopify-push/route.ts         # 图片推送（NDJSON 流式响应）
+    shopify-push/route.ts         # 图片/视频推送（NDJSON 流式响应）
     shopify-metaobjects/route.ts  # 元对象列表 & 迁移（NDJSON 流式）
+    shopify-metafields/route.ts   # 元字段定义列表 & 迁移（NDJSON 流式）
 
 components/
-  step-config.tsx                 # Step 1: API 配置
-  step-template-picker.tsx        # Step 2: 主题 & 模板选择
-  step-code-info.tsx              # Step 3: 模板代码信息
-  step-download.tsx               # Step 4: 文件列表 & 下载
+  step-template-picker.tsx        # Step 1: 主题 & 模板选择
+  template-info.tsx               # 模板 JSON / Section 信息面板（合并进步骤 1）
+  step-header.tsx                 # 步骤卡片共用头部
+  step-download.tsx               # Step 2: 素材列表 & 下载 / 推送
+  image-push-dialog.tsx           # 推送素材到目标站点（图片 / 视频）
   metaobject-migration.tsx        # 元对象迁移面板（/metaobjects 页面主体）
-  app-header.tsx                  # 顶栏 + 页面导航（素材下载 / 元对象迁移）
+  metafield-migration.tsx         # 元字段迁移面板（/metafields 页面主体）
+  app-sidebar.tsx                 # 侧边导航
+  site-header.tsx                 # 顶栏（页面标题 + 店铺状态）
   error-banner.tsx                # 错误提示
   media-card.tsx                  # 素材卡片（视频/图片）
-  preview-dialog.tsx              # 素材预览弹窗
+  preview-dialog.tsx              # 素材预览弹窗（支持左右切换）
+  copy-url-button.tsx             # 复制 CDN 链接
   code-dialog.tsx                 # 代码查看弹窗
   icons.tsx                       # SVG 图标组件
   ui/                             # shadcn/ui 基础组件
 
 lib/
-  shopify.ts                      # Shopify Admin API 文件解析核心逻辑
+  shopify.ts                      # Shopify Admin API 文件解析/查重核心逻辑
   metaobjects.ts                  # 元对象读取与跨店迁移核心逻辑
+  metafields.ts                   # 元字段定义迁移核心逻辑
+  stores.ts                       # 统一店铺列表 + 当前源/目标指针
   parse.ts                        # 模板 JSON 解析（提取媒体 URL & Section 引用）
   template.ts                     # 模板名称映射 & 工具函数
-  types.ts                        # 共用类型定义 & localStorage 读写
-  utils.ts                        # cn() 工具函数
+  filename.ts                     # 下载文件命名 / 扩展名对齐 / 重名去重
+  stream.ts                       # 流式读取响应 + 字节进度
+  ndjson.ts                       # NDJSON 流式读取
+  concurrency.ts                  # 限制并发数
+  types.ts                        # 共用类型定义
+  utils.ts                        # cn() / formatBytes()
 ```
 
 ## 快速开始
@@ -75,12 +88,12 @@ npm run build && npm start
 
 ## API 路由
 
-| 路由 | 方法 | 说明 |
-|------|------|------|
-| `/api/shopify-templates` | POST | `list-themes` / `list-templates` / `get-template` |
-| `/api/shopify-resolve` | POST | 将 `shopify://` URL 批量解析为 CDN 地址（NDJSON 流式） |
-| `/api/shopify-videos` | POST | 服务端代理下载（客户端 CORS 失败时回退） |
-| `/api/shopify-push` | POST | 将图片推送到目标 Shopify 站点（NDJSON 流式） |
+| 路由                       | 方法 | 说明                                                        |
+| -------------------------- | ---- | ----------------------------------------------------------- |
+| `/api/shopify-templates`   | POST | `list-themes` / `list-templates` / `get-template`           |
+| `/api/shopify-resolve`     | POST | 将 `shopify://` URL 批量解析为 CDN 地址（NDJSON 流式）      |
+| `/api/shopify-videos`      | POST | 服务端代理下载（客户端 CORS 失败时回退）                    |
+| `/api/shopify-push`        | POST | 将图片推送到目标 Shopify 站点（NDJSON 流式）                |
 | `/api/shopify-metaobjects` | POST | `list` 元对象列表 / `migrate` 迁移到目标站点（NDJSON 流式） |
 
 ## 图片推送功能
@@ -94,6 +107,7 @@ npm run build && npm start
 5. 已存在的文件会自动跳过，推送结果实时显示
 
 **上传策略**：
+
 - 优先使用 `src` 模式（Shopify 从 URL 拉取），适用于 Shopify CDN 内部图片
 - 若 `src` 模式失败（如外链图片），自动切换为**服务端下载后直传**模式
 
@@ -108,6 +122,7 @@ npm run build && npm start
 3. 点击 **迁移所选** 开始迁移，结果逐条实时显示
 
 **迁移策略**：
+
 - 目标站点缺失的元对象定义（含字段结构）自动创建
 - 目标站点已有同 handle 的条目自动跳过
 - 引用字段跨店重映射：元对象引用按 type+handle 对齐，文件引用按文件名对齐
@@ -120,7 +135,7 @@ npm run build && npm start
 需要以下 Admin API Access Token 权限（scopes）：
 
 - `read_themes` — 读取主题列表和模板内容
-- `read_files`  — 通过 GraphQL 解析文件 URL
+- `read_files` — 通过 GraphQL 解析文件 URL
 - `write_files` — 推送图片到目标站点（仅目标站点需要）
 - `read_metaobjects` / `read_metaobject_definitions` — 读取元对象（源站点）
 - `write_metaobjects` / `write_metaobject_definitions` — 迁移元对象（仅目标站点需要）

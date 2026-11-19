@@ -12,6 +12,10 @@ interface ResolvedEntry {
   resolved: string | null
   /** 原始文件名，供客户端命名下载文件 */
   filename: string | null
+  /** 可展示的元信息（图片可能没有大小，视频可能没有分辨率） */
+  size?: number | null
+  width?: number | null
+  height?: number | null
   error?: string
 }
 
@@ -36,7 +40,14 @@ export async function POST(request: Request) {
 
     const directEntries: ResolvedEntry[] = urls
       .filter((u) => !u.startsWith("shopify://"))
-      .map((original) => ({ original, resolved: original, filename: null }))
+      .map((original) => ({
+        original,
+        resolved: original,
+        filename: null,
+        size: null,
+        width: null,
+        height: null,
+      }))
 
     // ── 流式返回 NDJSON：解析出一个就推一个 ────────────────────────────
     // 以前是等全部解析完再一次性返回，于是界面上所有文件一起转到最慢的那
@@ -62,6 +73,9 @@ export async function POST(request: Request) {
                 original: entry.original,
                 resolved: file?.url ?? null,
                 filename: file?.filename ?? null,
+                size: file?.size ?? null,
+                width: file?.width ?? null,
+                height: file?.height ?? null,
                 error,
               })
             }

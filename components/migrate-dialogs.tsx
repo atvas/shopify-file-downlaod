@@ -35,7 +35,7 @@ interface MigrateDialogProps {
 }
 
 /**
- * 迁移弹窗 —— 与 ImagePushDialog 同款样式和流程：
+ * 迁移弹窗 —— 与 MediaPushDialog 同款样式和流程：
  * 确认（清单 + 说明）→ 进行中（进度条 + 逐条结果流入）→ 完成（汇总 + 失败明细）。
  */
 export function MigrateDialog({

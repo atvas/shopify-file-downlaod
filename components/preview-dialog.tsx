@@ -3,15 +3,24 @@
 import { useState, useRef, useCallback, useEffect } from "react"
 import type { MediaFile } from "@/lib/types"
 import { IconVideo, IconImage } from "@/components/icons"
+import { CopyUrlButton } from "@/components/copy-url-button"
 import { Dialog, DialogContent, DialogClose } from "@/components/ui/dialog"
+import { formatBytes } from "@/lib/utils"
 
 export function PreviewDialog({
   file,
   previewUrl,
+  position,
+  onPrev,
+  onNext,
   onClose,
 }: {
   file: MediaFile | null
   previewUrl: string | null
+  /** 当前素材在可预览列表中的位置 */
+  position?: { index: number; total: number } | null
+  onPrev?: () => void
+  onNext?: () => void
   onClose: () => void
 }) {
   const [loaded, setLoaded] = useState(false)
@@ -32,6 +41,36 @@ export function PreviewDialog({
     }
   }, [file, previewUrl])
 
+  // 左右方向键切换上一个 / 下一个；视频获得焦点时把方向键留给播放器
+  useEffect(() => {
+    if (!file) return
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.tagName === "VIDEO" ||
+          target.isContentEditable)
+      ) {
+        return
+      }
+
+      if (event.key === "ArrowLeft" && onPrev) {
+        event.preventDefault()
+        onPrev()
+      } else if (event.key === "ArrowRight" && onNext) {
+        event.preventDefault()
+        onNext()
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [file, onPrev, onNext])
+
   // 只通知父组件，不碰 displayUrl——动画期间媒体 src 保持有效
   const handleOpenChange = useCallback(
     (open: boolean) => {
@@ -43,6 +82,15 @@ export function PreviewDialog({
   const handleMediaReady = useCallback(() => {
     if (displayUrlRef.current === displayUrl) setLoaded(true)
   }, [displayUrl])
+
+  const meta = file
+    ? [
+        file.width && file.height ? `${file.width}×${file.height}` : "",
+        file.size ? formatBytes(file.size) : "",
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : ""
 
   return (
     <Dialog open={!!file} onOpenChange={handleOpenChange}>
@@ -69,25 +117,40 @@ export function PreviewDialog({
             <span className="truncate text-xs font-medium text-foreground/80">
               {file?.name}
             </span>
+            {meta && (
+              <span className="shrink-0 text-[10px] text-muted-foreground/60 tabular-nums">
+                {meta}
+              </span>
+            )}
           </div>
-          <DialogClose
-            render={
-              <button className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground" />
-            }
-          >
-            <svg
-              className="h-3.5 w-3.5"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+          <div className="flex shrink-0 items-center gap-1.5">
+            {position && position.total > 1 && (
+              <span className="text-[11px] text-muted-foreground/60 tabular-nums">
+                {position.index}/{position.total}
+              </span>
+            )}
+            {previewUrl && (
+              <CopyUrlButton url={previewUrl} className="h-6 w-6" />
+            )}
+            <DialogClose
+              render={
+                <button className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground" />
+              }
             >
-              <path d="M18 6 6 18" />
-              <path d="m6 6 12 12" />
-            </svg>
-          </DialogClose>
+              <svg
+                className="h-3.5 w-3.5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M18 6 6 18" />
+                <path d="m6 6 12 12" />
+              </svg>
+            </DialogClose>
+          </div>
         </div>
 
         {/* 媒体内容 */}
@@ -102,6 +165,48 @@ export function PreviewDialog({
                 <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/40" />
               </div>
             </div>
+          )}
+
+          {/* 上一个 / 下一个（也可用左右方向键） */}
+          {position && position.total > 1 && onPrev && (
+            <button
+              type="button"
+              onClick={onPrev}
+              aria-label="上一个素材"
+              className="absolute top-1/2 left-3 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition-colors hover:bg-black/60"
+            >
+              <svg
+                className="h-4 w-4"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="m15 18-6-6 6-6" />
+              </svg>
+            </button>
+          )}
+          {position && position.total > 1 && onNext && (
+            <button
+              type="button"
+              onClick={onNext}
+              aria-label="下一个素材"
+              className="absolute top-1/2 right-3 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition-colors hover:bg-black/60"
+            >
+              <svg
+                className="h-4 w-4"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="m9 18 6-6-6-6" />
+              </svg>
+            </button>
           )}
 
           {/* 媒体元素始终用 displayUrl，关闭动画期间 src 保持有效 */}

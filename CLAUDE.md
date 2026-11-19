@@ -29,7 +29,7 @@ npm run typecheck  # TypeScript type checking (no emit)
 There is no test framework configured — no test script, runner, or spec files.
 
 `npm run lint` currently exits non-zero on pre-existing `react-hooks/set-state-in-effect`
-errors in `components/code-dialog.tsx` (×2) and `components/image-push-dialog.tsx`.
+errors in `components/code-dialog.tsx` (×2).
 There are also pre-existing warnings: `@next/next/no-img-element` for the deliberate raw
 `<img>` tags in `components/media-card.tsx` / `components/preview-dialog.tsx`, and an
 unused `MAX_PAGE_SIZE` in `lib/shopify.ts`. Don't treat these as regressions — but don't

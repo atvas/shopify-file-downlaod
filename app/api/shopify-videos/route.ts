@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import JSZip from "jszip"
+import { alignExtension, safeFileName, uniqueFileName } from "@/lib/filename"
 import {
   mapWithConcurrency,
   normalizeUrl,
@@ -47,35 +48,6 @@ const MIME_TYPES: Record<string, string> = {
 function getMimeType(name: string): string {
   const ext = name.split(".").pop()?.toLowerCase() ?? ""
   return MIME_TYPES[ext] ?? "application/octet-stream"
-}
-
-/** 去掉路径分隔符，避免 zip 里出现目录穿越式的条目名 */
-function safeFileName(name: string): string {
-  return name.split(/[\\/]/).pop()?.trim() || "file"
-}
-
-/**
- * 让扩展名与实际拿到的字节一致。
- *
- * 原始上传是 .mov 而 Shopify 只提供 mp4 转码档时，存成 .mov 会让系统用错程序
- * 打开。URL 的扩展名才反映真实内容，所以以它为准。
- */
-function alignExtension(name: string, url: string): string {
-  const segment = url.split("/").pop()?.split("?")[0] ?? ""
-  const dotIndex = segment.lastIndexOf(".")
-
-  // 最后一段没有点，说明 URL 里根本没扩展名，保持原名
-  if (dotIndex <= 0) return name
-
-  const urlExt = segment.slice(dotIndex + 1).toLowerCase()
-  if (!/^[a-z0-9]{2,5}$/.test(urlExt)) return name
-
-  const nameExt = name.split(".").pop()?.toLowerCase() ?? ""
-  if (nameExt === urlExt) return name
-
-  return name.includes(".")
-    ? `${name.replace(/\.[^.]+$/, "")}.${urlExt}`
-    : `${name}.${urlExt}`
 }
 
 /** Content-Disposition 的 ASCII 回退值 + RFC 5987 的 UTF-8 真值 */
@@ -197,13 +169,15 @@ export async function POST(request: Request) {
       })
     }
 
-    // 多个文件：打包成 zip
+    // 多个文件：打包成 zip。重名会互相覆盖（JSZip 的 file() 是更新语义），
+    // 不同 URL 的同名素材必须改名，否则会静默丢文件。
     const zip = new JSZip()
+    const used = new Set<string>()
     for (const file of downloaded) {
-      zip.file(file.name, file.buffer)
+      zip.file(uniqueFileName(file.name, used), file.buffer)
     }
     if (errors.length > 0) {
-      zip.file("下载失败记录.txt", errors.join("\n\n"))
+      zip.file(uniqueFileName("下载失败记录.txt", used), errors.join("\n\n"))
     }
 
     const zipBuffer = await zip.generateAsync({ type: "arraybuffer" })

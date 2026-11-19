@@ -4,6 +4,8 @@ import { useState, useCallback, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogClose } from "@/components/ui/dialog"
 import { type MediaFile } from "@/lib/types"
+import { readNdjson } from "@/lib/ndjson"
+import { IconImage, IconVideo } from "@/components/icons"
 import {
   Progress,
   ProgressLabel,
@@ -11,43 +13,81 @@ import {
 } from "@/components/ui/progress"
 
 interface PushResult {
+  id?: string
   name: string
+  type?: "video" | "image"
   status: "uploaded" | "skipped" | "error"
   error?: string
 }
 
-interface ImagePushDialogProps {
+type PushPhase = "checking" | "download" | "upload" | "finalizing"
+
+/** 服务端在下载 / 上传过程中按字节推来的进度事件 */
+interface PushProgressEvent {
+  id?: string
+  name: string
+  type?: "video" | "image"
+  status: "progress"
+  phase: PushPhase
+  received?: number
+  total?: number
+}
+
+type PushEvent = PushResult | PushProgressEvent
+
+function formatProgress(event: PushProgressEvent): string {
+  if (event.phase === "checking") return "检查目标站点..."
+  if (event.phase === "finalizing") return "创建文件记录..."
+
+  const label = event.phase === "download" ? "下载源文件" : "上传到目标站点"
+  const total = event.total ?? 0
+  const received = event.received ?? 0
+  if (total <= 0) return label
+
+  return `${label} ${Math.min(100, Math.round((received / total) * 100))}%`
+}
+
+interface MediaPushDialogProps {
   open: boolean
-  images: MediaFile[]
+  files: MediaFile[]
   targetDomain: string
   targetToken: string
   onClose: () => void
   onError: (msg: string) => void
 }
 
-export function ImagePushDialog({
+/**
+ * 图片 / 视频共用的推送弹窗（历史文件名 image-push-dialog）。
+ * 目标站点已有同名文件时由服务端自动跳过。
+ */
+export function MediaPushDialog({
   open,
-  images,
+  files,
   targetDomain,
   targetToken,
   onClose,
   onError,
-}: ImagePushDialogProps) {
+}: MediaPushDialogProps) {
   const [phase, setPhase] = useState<"input" | "pushing" | "done">("input")
   const [results, setResults] = useState<PushResult[]>([])
   const [progress, setProgress] = useState<{
     current: number
     total: number
   } | null>(null)
+  // 正在处理的文件（可并行多个）及其阶段 / 字节进度
+  const [active, setActive] = useState<Record<string, PushProgressEvent>>({})
   const abortRef = useRef<AbortController | null>(null)
 
-  // 重置状态
+  // 重置状态。setState 放进微任务，避免同步 setState-in-effect
+  //（与 lib/list-cache.ts 的自动加载同一处理方式）
   useEffect(() => {
-    if (open) {
+    if (!open) return
+    Promise.resolve().then(() => {
       setPhase("input")
       setResults([])
       setProgress(null)
-    }
+      setActive({})
+    })
   }, [open])
 
   const handlePush = useCallback(async () => {
@@ -55,14 +95,14 @@ export function ImagePushDialog({
       onError("请先在店铺配置中设置当前目标店铺")
       return
     }
-    if (images.length === 0) return
+    if (files.length === 0) return
 
     const ac = new AbortController()
     abortRef.current = ac
 
     setPhase("pushing")
     setResults([])
-    setProgress({ current: 0, total: images.length })
+    setProgress({ current: 0, total: files.length })
     onError("")
 
     try {
@@ -72,9 +112,11 @@ export function ImagePushDialog({
         body: JSON.stringify({
           targetDomain,
           targetToken,
-          images: images.map((img) => ({
-            url: img.resolvedUrl || img.url,
-            name: img.name,
+          files: files.map((file, i) => ({
+            id: String(i),
+            url: file.resolvedUrl || file.url,
+            name: file.name,
+            type: file.type,
           })),
         }),
         signal: ac.signal,
@@ -86,43 +128,29 @@ export function ImagePushDialog({
       }
       if (!res.body) throw new Error("推送失败")
 
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ""
       let count = 0
 
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split("\n")
-        buffer = lines.pop() ?? ""
-
-        for (const line of lines) {
-          const trimmed = line.trim()
-          if (!trimmed) continue
-          try {
-            const result = JSON.parse(trimmed) as PushResult
-            count++
-            setResults((prev) => [...prev, result])
-            setProgress({ current: count, total: images.length })
-          } catch {
-            // skip bad lines
-          }
+      await readNdjson<PushEvent>(res, (event) => {
+        // 进度事件只更新「进行中的文件」，不进入完成列表
+        if (event.status === "progress") {
+          const key = event.id ?? event.name
+          setActive((prev) => ({ ...prev, [key]: event }))
+          return
         }
-      }
 
-      // 收尾
-      const tail = buffer.trim()
-      if (tail) {
-        try {
-          const result = JSON.parse(tail) as PushResult
-          setResults((prev) => [...prev, result])
-        } catch {
-          // ignore
-        }
-      }
+        count++
+        setResults((prev) => [...prev, event])
+        setProgress({ current: count, total: files.length })
+
+        // 该文件已出最终结果，从进行中列表移除
+        const key = event.id ?? event.name
+        setActive((prev) => {
+          if (!(key in prev)) return prev
+          const next = { ...prev }
+          delete next[key]
+          return next
+        })
+      })
 
       setPhase("done")
     } catch (err) {
@@ -130,7 +158,7 @@ export function ImagePushDialog({
       onError(err instanceof Error ? err.message : "推送失败")
       setPhase("input")
     }
-  }, [targetDomain, targetToken, images, onError])
+  }, [targetDomain, targetToken, files, onError])
 
   const handleCancel = useCallback(() => {
     abortRef.current?.abort()
@@ -153,6 +181,18 @@ export function ImagePushDialog({
   const uploaded = results.filter((r) => r.status === "uploaded").length
   const skipped = results.filter((r) => r.status === "skipped").length
   const failed = results.filter((r) => r.status === "error").length
+  const videoUploaded = results.filter(
+    (r) => r.status === "uploaded" && r.type === "video"
+  ).length
+
+  const videoCount = files.filter((f) => f.type === "video").length
+  const imageCount = files.filter((f) => f.type === "image").length
+  const title =
+    videoCount > 0 && imageCount === 0
+      ? "推送视频到目标站点"
+      : imageCount > 0 && videoCount === 0
+        ? "推送图片到目标站点"
+        : "推送素材到目标站点"
 
   return (
     // 进行中禁止点遮罩关闭（与迁移弹窗一致）
@@ -167,7 +207,7 @@ export function ImagePushDialog({
       >
         {/* 顶栏 */}
         <div className="flex items-center justify-between border-b border-border/50 bg-card/80 px-4 py-2.5 backdrop-blur-sm">
-          <span className="text-sm font-medium">推送图片到目标站点</span>
+          <span className="text-sm font-medium">{title}</span>
           <DialogClose
             render={
               <button className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground" />
@@ -197,30 +237,27 @@ export function ImagePushDialog({
                   目标站点: {targetDomain}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  将推送 {images.length} 张图片，已存在的文件会自动跳过
+                  将推送 {files.length} 个文件，已存在的文件会自动跳过
                 </p>
+                {videoCount > 0 && (
+                  <p className="mt-1 text-xs text-muted-foreground/70">
+                    视频上传后目标站点会自动转码，可在「内容 → 文件」中查看
+                  </p>
+                )}
               </div>
 
               <div className="max-h-48 space-y-1 overflow-y-auto rounded-lg border border-border/30 bg-background/50 p-2">
-                {images.map((img) => (
+                {files.map((file) => (
                   <div
-                    key={img.url}
+                    key={file.url}
                     className="flex items-center gap-2 rounded px-2 py-1 text-xs text-muted-foreground"
                   >
-                    <svg
-                      className="h-3 w-3 shrink-0 text-emerald-500"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                      <circle cx="9" cy="9" r="2" />
-                      <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
-                    </svg>
-                    <span className="truncate">{img.name}</span>
+                    {file.type === "video" ? (
+                      <IconVideo className="h-3 w-3 shrink-0 text-blue-500" />
+                    ) : (
+                      <IconImage className="h-3 w-3 shrink-0 text-emerald-500" />
+                    )}
+                    <span className="truncate">{file.name}</span>
                   </div>
                 ))}
               </div>
@@ -257,6 +294,37 @@ export function ImagePushDialog({
                   </span>
                 </Progress>
               )}
+
+              {/* 进行中的文件（并行时最多 PUSH_CONCURRENCY 条） */}
+              {Object.entries(active).map(([key, event]) => (
+                <div
+                  key={key}
+                  className="space-y-1.5 rounded-lg border border-border/40 bg-muted/20 px-3 py-2"
+                >
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="truncate text-muted-foreground">
+                      {event.name}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1.5 text-muted-foreground tabular-nums">
+                      {formatProgress(event)}
+                      {(event.phase === "checking" ||
+                        event.phase === "finalizing") && (
+                        <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
+                      )}
+                    </span>
+                  </div>
+                  {(event.phase === "download" || event.phase === "upload") &&
+                    (event.total ?? 0) > 0 && (
+                      <Progress
+                        value={Math.min(
+                          100,
+                          (100 * (event.received ?? 0)) / (event.total ?? 1)
+                        )}
+                        className="gap-1"
+                      />
+                    )}
+                </div>
+              ))}
 
               <div className="max-h-64 space-y-1 overflow-y-auto">
                 {results.map((r, i) => (
@@ -359,6 +427,11 @@ export function ImagePushDialog({
                     {skipped > 0 && ` · ${skipped} 跳过`}
                     {failed > 0 && ` · ${failed} 失败`}
                   </p>
+                  {videoUploaded > 0 && (
+                    <p className="text-[11px] text-muted-foreground/70">
+                      视频在目标站点仍需转码，稍后可在「内容 → 文件」中查看
+                    </p>
+                  )}
                 </div>
               </div>
 

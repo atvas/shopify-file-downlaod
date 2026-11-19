@@ -3,6 +3,8 @@
 import { useState, useRef, useCallback } from "react"
 import type { MediaFile } from "@/lib/types"
 import { IconVideo } from "@/components/icons"
+import { CopyUrlButton } from "@/components/copy-url-button"
+import { formatBytes } from "@/lib/utils"
 
 /**
  * 从视频 URL 抽取一帧作为缩略图。
@@ -121,8 +123,14 @@ export function MediaCard({
           </div>
         )}
 
-        {/* hover 底部渐变遮罩 + 预览按钮 */}
+        {/* hover 底部渐变遮罩 + 预览 / 复制按钮 */}
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/40 to-transparent opacity-0 transition-opacity duration-200 group-hover:opacity-100" />
+        {file.resolvedUrl && (
+          <CopyUrlButton
+            url={file.resolvedUrl}
+            className="absolute right-8 bottom-2 h-5 w-5 bg-white/15 text-white opacity-0 backdrop-blur-md transition-all duration-200 group-hover:opacity-100 hover:scale-110 hover:bg-white/25"
+          />
+        )}
         <button
           type="button"
           className="absolute right-2 bottom-2 flex h-5 w-5 items-center justify-center rounded-full bg-white/15 text-white opacity-0 backdrop-blur-md transition-all duration-200 group-hover:opacity-100 hover:scale-110 hover:bg-white/25"
@@ -196,6 +204,13 @@ export function MediaCard({
         <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground/80">
           {file.name}
         </span>
+        {(file.size || (file.width && file.height)) && (
+          <span className="shrink-0 text-[10px] text-muted-foreground/60 tabular-nums">
+            {file.width && file.height ? `${file.width}×${file.height}` : ""}
+            {file.width && file.height && file.size ? " · " : ""}
+            {file.size ? formatBytes(file.size) : ""}
+          </span>
+        )}
       </div>
     </div>
   )

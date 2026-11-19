@@ -2,16 +2,17 @@
 
 import { useState, useCallback, useRef } from "react"
 import { type MediaFile, type ResolveResult } from "@/lib/types"
+import { readNdjson } from "@/lib/ndjson"
 import { parseMediaUrls, parseSectionRefs, SectionRef } from "@/lib/parse"
 import { getCurrentSource, getCurrentTarget } from "@/lib/stores"
 import { useMounted } from "@/hooks/use-mounted"
 import { PreviewDialog } from "@/components/preview-dialog"
 import { CodeDialog } from "@/components/code-dialog"
 import { StepTemplatePicker } from "@/components/step-template-picker"
-import { StepCodeInfo } from "@/components/step-code-info"
+import { TemplateInfo } from "@/components/template-info"
 import { StepDownload } from "@/components/step-download"
 import { ErrorBanner } from "@/components/error-banner"
-import { ImagePushDialog } from "@/components/image-push-dialog"
+import { MediaPushDialog } from "@/components/image-push-dialog"
 
 export default function Page() {
   // ── 全局状态 ─────────────────────────────────────────────────────────
@@ -19,6 +20,12 @@ export default function Page() {
   const [videos, setVideos] = useState<MediaFile[]>([])
   const [error, setError] = useState("")
   const [resolving, setResolving] = useState(false)
+  // 解析进度（已出结果 / 总数）与解析失败的原始 URL
+  const [resolveProgress, setResolveProgress] = useState<{
+    done: number
+    total: number
+  } | null>(null)
+  const [failedUrls, setFailedUrls] = useState<string[]>([])
 
   // API 凭证：来自店铺配置页（/config）的「当前源 / 当前目标」
   const [storeDomain] = useState(() => getCurrentSource()?.domain ?? "")
@@ -45,12 +52,12 @@ export default function Page() {
   const [targetDomain] = useState(() => getCurrentTarget()?.domain ?? "")
   const [targetToken] = useState(() => getCurrentTarget()?.token ?? "")
 
-  // 图片 Push 弹窗
+  // 素材 Push 弹窗（图片 / 视频）
   const [pushDialogOpen, setPushDialogOpen] = useState(false)
-  const [pushImages, setPushImages] = useState<MediaFile[]>([])
+  const [pushFiles, setPushFiles] = useState<MediaFile[]>([])
 
-  const handlePushImages = useCallback((images: MediaFile[]) => {
-    setPushImages(images)
+  const handlePushFiles = useCallback((files: MediaFile[]) => {
+    setPushFiles(files)
     setPushDialogOpen(true)
   }, [])
 
@@ -62,6 +69,10 @@ export default function Page() {
     setSections([])
     setViewingTemplateJson(false)
     setSelectedKey(key)
+    setFailedUrls([])
+    setResolveProgress(null)
+    setPreviewFile(null)
+    setPreviewUrl(null)
   }, [])
 
   // 选完模板解析出素材后，自动把视口带到素材/下载区
@@ -72,11 +83,80 @@ export default function Page() {
     )
   }, [])
 
+  /**
+   * 解析一批 shopify:// URL，结果逐条写回 videos。
+   * 返回本次仍未解析成功的 URL，供「重试失败项」复用。
+   */
+  const resolveShopifyUrls = useCallback(
+    async (urls: string[]): Promise<string[]> => {
+      if (urls.length === 0) return []
+
+      const failures: string[] = []
+      const resolvedUrls = new Set<string>()
+      let done = 0
+
+      setResolving(true)
+      setResolveProgress({ done: 0, total: urls.length })
+
+      const applyResolved = (item: ResolveResult) => {
+        if (item.resolved) resolvedUrls.add(item.original)
+        else failures.push(item.error || `无法解析 ${item.original}`)
+
+        setVideos((prev) =>
+          prev.map((f) => {
+            if (f.resolvedUrl || f.url !== item.original) return f
+            if (!item.resolved) return f
+            return {
+              ...f,
+              resolvedUrl: item.resolved,
+              name: item.filename || f.name,
+              size: item.size ?? f.size ?? null,
+              width: item.width ?? f.width ?? null,
+              height: item.height ?? f.height ?? null,
+            }
+          })
+        )
+      }
+
+      try {
+        const res = await fetch("/api/shopify-resolve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ storeDomain, accessToken, urls }),
+        })
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          throw new Error(data.error || "解析链接失败")
+        }
+
+        await readNdjson<ResolveResult>(res, (item) => {
+          done++
+          setResolveProgress({ done, total: urls.length })
+          applyResolved(item)
+        })
+
+        if (failures.length > 0) setError(failures.join("\n\n"))
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "解析链接失败")
+      } finally {
+        setResolving(false)
+        setResolveProgress(null)
+      }
+
+      const failed = urls.filter((url) => !resolvedUrls.has(url))
+      setFailedUrls(failed)
+      return failed
+    },
+    [storeDomain, accessToken]
+  )
+
   const handleTemplateContent = useCallback(
     async (key: string, content: string) => {
       setSelectedKey(key)
       setTemplateJson(content)
       setError("")
+      setFailedUrls([])
       try {
         const parsed = parseMediaUrls(content)
         setSections(parseSectionRefs(content))
@@ -96,116 +176,32 @@ export default function Page() {
           .filter((f) => !f.resolvedUrl)
           .map((f) => f.url)
 
+        if (shopifyUrls.length > 0 && (!storeDomain || !accessToken)) {
+          setError(
+            "存在 shopify:// 协议的文件，请先在店铺配置中设置当前源店铺再解析"
+          )
+          setVideos(direct)
+          return
+        }
+
+        setVideos(direct)
+        scrollToResults()
+
         if (shopifyUrls.length > 0) {
-          if (!storeDomain || !accessToken) {
-            setError(
-              "存在 shopify:// 协议的文件，请先在店铺配置中设置当前源店铺再解析"
-            )
-            setVideos(direct)
-            return
-          }
-
-          setResolving(true)
-          setVideos(direct)
-          scrollToResults()
-
-          const failures: string[] = []
-
-          const applyResolved = (items: ResolveResult[]) => {
-            if (items.length === 0) return
-            const resolveMap = new Map(items.map((r) => [r.original, r]))
-            setVideos((prev) =>
-              prev.map((f) => {
-                if (f.resolvedUrl) return f
-                const hit = resolveMap.get(f.url)
-                if (!hit?.resolved) return f
-                return {
-                  ...f,
-                  resolvedUrl: hit.resolved,
-                  name: hit.filename || f.name,
-                }
-              })
-            )
-          }
-
-          const collect = (items: ResolveResult[]) => {
-            for (const item of items) {
-              if (!item.resolved) {
-                failures.push(item.error || `无法解析 ${item.original}`)
-              }
-            }
-            applyResolved(items)
-          }
-
-          try {
-            const res = await fetch("/api/shopify-resolve", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                storeDomain,
-                accessToken,
-                urls: shopifyUrls,
-              }),
-            })
-
-            if (!res.ok) {
-              const data = await res.json().catch(() => ({}))
-              throw new Error(data.error || "解析链接失败")
-            }
-            if (!res.body) throw new Error("解析链接失败")
-
-            const reader = res.body.getReader()
-            const decoder = new TextDecoder()
-            let buffer = ""
-
-            for (;;) {
-              const { done, value } = await reader.read()
-              if (done) break
-
-              buffer += decoder.decode(value, { stream: true })
-              const lines = buffer.split("\n")
-              buffer = lines.pop() ?? ""
-
-              collect(
-                lines
-                  .map((line) => line.trim())
-                  .filter(Boolean)
-                  .flatMap((line) => {
-                    try {
-                      return [JSON.parse(line) as ResolveResult]
-                    } catch {
-                      return []
-                    }
-                  })
-              )
-            }
-
-            const tail = buffer.trim()
-            if (tail) {
-              try {
-                const item = JSON.parse(tail) as ResolveResult
-                collect([item])
-              } catch {
-                // ignore
-              }
-            }
-
-            if (failures.length > 0) setError(failures.join("\n\n"))
-          } catch (err) {
-            setError(err instanceof Error ? err.message : "解析链接失败")
-          } finally {
-            setResolving(false)
-          }
-        } else {
-          setVideos(direct)
-          scrollToResults()
+          await resolveShopifyUrls(shopifyUrls)
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "解析失败")
       }
     },
-    [storeDomain, accessToken, scrollToResults]
+    [storeDomain, accessToken, scrollToResults, resolveShopifyUrls]
   )
+
+  const handleRetryFailed = useCallback(async () => {
+    if (failedUrls.length === 0 || resolving) return
+    setError("")
+    await resolveShopifyUrls(failedUrls)
+  }, [failedUrls, resolving, resolveShopifyUrls])
 
   // ── Section 代码查看 ────────────────────────────────────────────────
   const handleViewSection = useCallback(
@@ -243,18 +239,35 @@ export default function Page() {
 
   // ── 预览 ─────────────────────────────────────────────────────────────
   const handlePreview = useCallback((file: MediaFile) => {
-    const src = file.resolvedUrl || file.url
-    const url =
-      file.type === "video"
-        ? src + (src.includes("?") ? "&" : "?") + "width=1200"
-        : src
     setPreviewFile(file)
-    setPreviewUrl(url)
+    setPreviewUrl(file.resolvedUrl || file.url)
   }, [])
 
   const closePreview = useCallback(() => {
     setPreviewFile(null)
   }, [])
+
+  // 预览切换只走已解析的素材
+  const previewList = videos.filter((v) => !!v.resolvedUrl)
+  const previewIndex = previewFile
+    ? previewList.findIndex((v) => v.url === previewFile.url)
+    : -1
+
+  const handlePreviewStep = useCallback(
+    (delta: number) => {
+      if (!previewFile) return
+      const list = videos.filter((v) => !!v.resolvedUrl)
+      const index = list.findIndex((v) => v.url === previewFile.url)
+      if (index < 0) return
+
+      const next = list[(index + delta + list.length) % list.length]
+      if (!next) return
+
+      setPreviewFile(next)
+      setPreviewUrl(next.resolvedUrl || next.url)
+    },
+    [previewFile, videos]
+  )
 
   // ── Loading skeleton ────────────────────────────────────────────────
   if (!mounted) {
@@ -266,7 +279,7 @@ export default function Page() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-6 px-4 py-6 md:px-6">
+    <div className="mx-auto w-full max-w-340 px-4 pt-8 pb-12 md:px-8 md:pt-10">
       {/* Step 1: 选择主题 & 模板 */}
       <StepTemplatePicker
         storeDomain={storeDomain}
@@ -280,40 +293,57 @@ export default function Page() {
         onResolvingChange={setResolving}
         onSelectionStart={handleSelectionStart}
         onThemeChange={setSelectedThemeId}
+        footer={
+          <TemplateInfo
+            templateJson={templateJson}
+            selectedKey={selectedKey}
+            sections={sections}
+            resolving={resolving}
+            onViewSection={handleViewSection}
+            onViewTemplateJson={() => setViewingTemplateJson(true)}
+          />
+        }
       />
 
-      {/* Step 2: 模板代码信息 */}
-      <StepCodeInfo
-        templateJson={templateJson}
-        selectedKey={selectedKey}
-        sections={sections}
-        resolving={resolving}
-        onViewSection={handleViewSection}
-        onViewTemplateJson={() => setViewingTemplateJson(true)}
-      />
+      {/* 两步之间的唯一分割线 */}
+      <div className="my-8 h-px bg-[#EFEFEF] dark:bg-border" />
 
       {/* 错误提示 */}
-      <ErrorBanner error={error} />
+      {error ? (
+        <div className="mb-6">
+          <ErrorBanner error={error} />
+        </div>
+      ) : null}
 
-      {/* Step 3: 文件下载 */}
+      {/* Step 2: 素材列表 & 下载/推送 */}
       <div ref={resultsRef} className="scroll-mt-20">
         <StepDownload
           videos={videos}
           resolving={resolving}
+          resolveProgress={resolveProgress}
+          failedCount={failedUrls.length}
           storeDomain={storeDomain}
           accessToken={accessToken}
           targetDomain={targetDomain}
           targetToken={targetToken}
+          onRetryFailed={handleRetryFailed}
           onVideosChange={setVideos}
           onPreview={handlePreview}
           onError={setError}
-          onPushImages={handlePushImages}
+          onPushFiles={handlePushFiles}
         />
       </div>
       {/* ── 预览 Dialog ──────────────────────────────────────────────── */}
       <PreviewDialog
         file={previewFile}
         previewUrl={previewUrl}
+        position={
+          previewIndex >= 0
+            ? { index: previewIndex + 1, total: previewList.length }
+            : null
+        }
+        onPrev={() => handlePreviewStep(-1)}
+        onNext={() => handlePreviewStep(1)}
         onClose={closePreview}
       />
 
@@ -337,10 +367,10 @@ export default function Page() {
         onClose={() => setViewingTemplateJson(false)}
       />
 
-      {/* ── 图片 Push Dialog ─────────────────────────────────────── */}
-      <ImagePushDialog
+      {/* ── 素材 Push Dialog ─────────────────────────────────────── */}
+      <MediaPushDialog
         open={pushDialogOpen}
-        images={pushImages}
+        files={pushFiles}
         targetDomain={targetDomain}
         targetToken={targetToken}
         onClose={() => setPushDialogOpen(false)}
